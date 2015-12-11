@@ -1,35 +1,55 @@
 #include <iostream>
-#include	<sndfile.hh>
+#include <sndfile.hh>
 #include "RtAudio.h"
 
 #define CHUNKSIZE 1024
 
+enum RWTYPES {
+  INT8,
+  INT16,
+  INT24,
+  INT32,
+  FLOAT32,
+  FLOAT64
+};
 
-struct FileContainer{
-  int16_t* file_buffer;
+template<typename READ_TYPE>
+struct file_container {
+  READ_TYPE* file_buffer;
+  READ_TYPE* chunk_buffer;
   long int offset;
   short channels;
 };
 
-int saw( void *outputBuffer, void *inputBuffer, unsigned int nBufferFrames,
+template<typename READ_TYPE>
+struct params_to_abuse {
+
+  // the file to use !
+  file_container<READ_TYPE>* sample_file;
+
+  // the params !
+  float frame_increment;
+  float sample_repeat;
+};
+
+// the parameterized callback function ...
+template<typename READ_TYPE, typename WRITE_TYPE>
+int abusive_play( void *outputBuffer, void *inputBuffer, unsigned int nBufferFrames,
          double streamTime, RtAudioStreamStatus status, void *userData )
 {
+  // get the parameter container from the user data ...
+  params_to_abuse<READ_TYPE>* params = reinterpret_cast<params_to_abuse<READ_TYPE>*>(userData);
+	file_container<READ_TYPE>* file_container = params->sample_file;
 
-  int16_t *out_buffer = (int16_t *) outputBuffer;
-	FileContainer* file_container = reinterpret_cast<FileContainer*>(userData);
+  if ( status ) { std::cout << "Stream underflow detected!" << std::endl; }
 
-  if ( status ){
-    std::cout << "Stream underflow detected!" << std::endl;
-  }
-  //std::cout << "start!!" << std::endl;
-//  std::cout << file_container->file_buffer[file_container->offset + 0] << std::endl;
-  // copy from large sample buffer to output buffer!
+  // transfer samples from file buffer to output !
   for(int i = 0; i < nBufferFrames * 2; i++){
-
-    out_buffer[i] = file_container->file_buffer[file_container->offset + i];
+    ((WRITE_TYPE*) outputBuffer)[i] = file_container->file_buffer[file_container->offset + i];
   }
+
+  // increament read offest
   file_container->offset += nBufferFrames * 2;
-//  std::cout << file_container->offset << std::endl;
 
   return 0;
 }
@@ -46,21 +66,22 @@ int main () {
   std::cout << "Samplerate " << file.samplerate() << std::endl;
   std::cout << "Channels: " << file.channels() << std::endl;
 
-  FileContainer* file_container = new FileContainer;
-  file_container->file_buffer = new int16_t[file.frames() * file.channels()];
-  std::cout << "Buffer allocated !" << std::endl;
-  file_container->offset = 0;
-  file_container->channels = file.channels();
+  params_to_abuse<int16_t>* params = new params_to_abuse<int16_t>;
+  params->sample_file = new file_container<int16_t>;
 
+  params->sample_file->file_buffer = new int16_t[file.frames() * file.channels()];
 
-  int16_t frame_chunksize = CHUNKSIZE * 2;
-  int16_t chunk_buffer[frame_chunksize];
+  int frame_chunksize = CHUNKSIZE * file.channels();
+  params->sample_file->chunk_buffer = new int16_t[frame_chunksize];
+  params->sample_file->offset = 0;
+  params->sample_file->channels = file.channels();
+
   std::cout << "Chunk Buffer allocated !" << std::endl;
   // Read file into buffer
   long int read_offset = 0;
-  while(file.readf(chunk_buffer, CHUNKSIZE) == CHUNKSIZE ){
+  while(file.readf(params->sample_file->chunk_buffer, CHUNKSIZE) == CHUNKSIZE ){
     for (int i = 0; i < frame_chunksize; i++){
-      file_container->file_buffer[read_offset + i] = chunk_buffer[i];
+      params->sample_file->file_buffer[read_offset + i] = params->sample_file->chunk_buffer[i];
     }
     read_offset += frame_chunksize;
   }
@@ -81,7 +102,7 @@ int main () {
 
   try {
     dac.openStream( &parameters, NULL, RTAUDIO_SINT16,
-                    sampleRate, &bufferFrames, &saw, (void *)file_container);
+                    sampleRate, &bufferFrames, &abusive_play<int16_t, int16_t>, (void*) params);
     dac.startStream();
   }
   catch ( RtAudioError& e ) {
