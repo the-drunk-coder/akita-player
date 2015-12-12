@@ -3,12 +3,14 @@
 #include <iterator>
 #include <sndfile.hh>
 #include <boost/program_options.hpp>
+#include <boost/algorithm/string.hpp>
 #include "RtAudio.h"
 
 namespace po = boost::program_options;
 
 #define CHUNKSIZE 1024
 
+// format enum
 enum RWTYPES {
   INT8,
   INT16,
@@ -16,18 +18,17 @@ enum RWTYPES {
   FLOAT64
 };
 
+// parameters struct
 struct params_to_abuse {
-
-  // the params !
   float buffer_cut;
   float offset_cut;
   float sample_repeat;
   RWTYPES read_type;
   RWTYPES write_type;
   RWTYPES stream_type;
-
 };
 
+// file container to communicate with callback function
 template<typename READ_TYPE>
 class file_container {
 public:
@@ -53,8 +54,6 @@ public:
 };
 
 
-
-
 // the parameterized callback function ...
 template<typename READ_TYPE, typename WRITE_TYPE>
 int abusive_play( void *outputBuffer, void *inputBuffer, unsigned int nBufferFrames,
@@ -69,8 +68,8 @@ int abusive_play( void *outputBuffer, void *inputBuffer, unsigned int nBufferFra
 
   // transfer samples from file buffer to output !
   for(int i = 0; i < nBufferFrames * params->buffer_cut; i++) {
-    for(float j = 0; j < params->sample_repeat; j+=1.0){
-      if(fc->offset + i > fc->samples){
+    for(float j = 0; j < params->sample_repeat; j+=1.0) {
+      if(fc->offset + i > fc->samples) {
         fc->offset = 0;
       }
       *out_buf++ = fc->file_buffer[fc->offset + i];
@@ -94,8 +93,29 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& v)
     return os;
 }
 
+// custom validator for r/w types
+std::istream& operator>> (std::istream &in, RWTYPES& rwtype)
+{
+    std::string token;
+    in >> token;
 
-po::options_description init_opts(int ac, char* av[], po::variables_map* vm){
+    boost::to_upper(token);
+
+    if (token.compare("INT8")) {
+        rwtype = RWTYPES::INT8;
+    } else if (token.compare("INT16")) {
+      rwtype = RWTYPES::INT16;
+    } else if (token.compare("FLOAT32")) {
+        rwtype = RWTYPES::FLOAT32;
+    } else if (token.compare("FLOAT64")) {
+        rwtype = RWTYPES::FLOAT64;
+    }
+
+    return in;
+}
+
+// initialize the command line parameter parser
+po::options_description init_opts(int ac, char* av[], po::variables_map* vm, params_to_abuse *params){
   po::options_description desc("Parameters to use in a creative way");
   desc.add_options()
       ("help", "Display this help!")
@@ -107,11 +127,11 @@ po::options_description init_opts(int ac, char* av[], po::variables_map* vm){
             "Don't fill output buffer completely!")
       ("offset-cut", po::value<float>(),
             "Modify offset increment (chunk size read from buffer)!")
-      ("read-type", po::value<float>(),
+      ("read-type", po::value<RWTYPES>(&(*params).read_type),
             "Type used to read from audio file!")
-      ("write-type", po::value<float>(),
+      ("write-type", po::value<RWTYPES>(&(*params).write_type),
             "Type used to write to audio buffer!")
-      ("stream-type", po::value<float>(),
+      ("stream-type", po::value<RWTYPES>(&(*params).stream_type),
             "Type used for the audio stream!")
   ;
   // ----- end options ... what kind of syntax is this ??
@@ -131,9 +151,9 @@ int load_file_and_play(SndfileHandle file, params_to_abuse *params) {
   file_container<READ_TYPE> *fc = new file_container<READ_TYPE>(file);
   fc->params = params;
 
-
   int frame_chunksize = CHUNKSIZE * file.channels();
   READ_TYPE *chunk_buffer = new READ_TYPE[frame_chunksize];
+
   // Read file into buffer
   long int read_offset = 0;
   while(file.readf(chunk_buffer, CHUNKSIZE) == CHUNKSIZE){
@@ -142,6 +162,7 @@ int load_file_and_play(SndfileHandle file, params_to_abuse *params) {
     }
     read_offset += frame_chunksize;
   }
+  // not needed any longer !
   delete[] chunk_buffer;
 
 	RtAudio dac;
@@ -157,13 +178,22 @@ int load_file_and_play(SndfileHandle file, params_to_abuse *params) {
   unsigned int bufferFrames = 1024; // 256 sample frames
 
   try {
-    if(params->stream_type == RWTYPES::INT16){
+    if(params->stream_type == RWTYPES::INT8) {
+      dac.openStream( &parameters, NULL, RTAUDIO_SINT8,
+                      sampleRate, &bufferFrames, &abusive_play<READ_TYPE, WRITE_TYPE>, (void*) fc);
+    } else if (params->stream_type == RWTYPES::FLOAT32) {
+      dac.openStream( &parameters, NULL, RTAUDIO_FLOAT32,
+                      sampleRate, &bufferFrames, &abusive_play<READ_TYPE, WRITE_TYPE>, (void*) fc);
+    } else if (params->stream_type == RWTYPES::FLOAT64) {
+      dac.openStream( &parameters, NULL, RTAUDIO_FLOAT64,
+                      sampleRate, &bufferFrames, &abusive_play<READ_TYPE, WRITE_TYPE>, (void*) fc);
+    } else {
+      // this is probably the most commom option
       dac.openStream( &parameters, NULL, RTAUDIO_SINT16,
                       sampleRate, &bufferFrames, &abusive_play<READ_TYPE, WRITE_TYPE>, (void*) fc);
     }
     dac.startStream();
-  }
-  catch ( RtAudioError& e ) {
+  } catch ( RtAudioError& e ) {
     e.printMessage();
     return 0;
   }
@@ -174,8 +204,7 @@ int load_file_and_play(SndfileHandle file, params_to_abuse *params) {
   try {
     // Stop the stream
     dac.stopStream();
-  }
-  catch (RtAudioError& e) {
+  } catch (RtAudioError& e) {
     e.printMessage();
   }
   if ( dac.isStreamOpen() ) dac.closeStream();
@@ -190,9 +219,12 @@ int main (int ac, char* av[]) {
   // Salutations!
   std::cout << "\n~~ akita - create noise abusing low-level audio parameters! ~~\n"<< std::endl ;
 
+  // get params to abuse ...
+  params_to_abuse params;
+
   // initialize command line options
   po::variables_map vm;
-  po::options_description desc = init_opts(ac, av, &vm);
+  po::options_description desc = init_opts(ac, av, &vm, &params);
 
   // help output
   if (vm.count("help")) {
@@ -209,11 +241,8 @@ int main (int ac, char* av[]) {
     std::cout << "Please specify input file !" << std::endl;
     return 0;
   }
+
   SndfileHandle file = SndfileHandle (fname) ;
-
-
-  // get params to abuse ...
-  params_to_abuse params;
 
   params.sample_repeat = 1.0;
   if (vm.count("sample-repeat")) {
@@ -230,15 +259,60 @@ int main (int ac, char* av[]) {
         params.offset_cut = vm["offset-cut"].as<float>();
   }
 
+  params.stream_type = RWTYPES::INT16;
+  if (vm.count("stream-type")) {
+        params.stream_type = vm["stream-type"].as<RWTYPES>();
+  }
+
+  params.read_type = RWTYPES::INT16;
+  if (vm.count("stream-type")) {
+        params.read_type = vm["read-type"].as<RWTYPES>();
+  }
+
+  params.write_type = RWTYPES::INT16;
+  if (vm.count("stream-type")) {
+        params.read_type = vm["write-type"].as<RWTYPES>();
+  }
+
   // display some file info ...
   std::cout << "Input file: " << fname << ", " << file.channels() << "ch, "
     << file.samplerate() << "Hz, "<< file.frames() << " frames." << std::endl;
 
-  params.stream_type = RWTYPES::INT16;
+  // ok, here it get's a little awkward ... a dynamically-typed language would come
+  // in handy here ...
+  int exit_code = 0;
 
+  if (params.read_type == RWTYPES::FLOAT32) {
+    if(params.write_type == RWTYPES::INT8) {
+      exit_code = load_file_and_play<float_t, int8_t>(file, &params);
+    } else if(params.write_type == RWTYPES::FLOAT32) {
+      exit_code = load_file_and_play<float_t, float_t>(file, &params);
+    } else if(params.write_type == RWTYPES::FLOAT64) {
+      exit_code = load_file_and_play<float_t, double_t>(file, &params);
+    } else {
+      exit_code = load_file_and_play<float_t, int16_t>(file, &params);
+    }
+  } else if (params.read_type == RWTYPES::FLOAT64) {
+    if(params.write_type == RWTYPES::INT8) {
+      exit_code = load_file_and_play<double_t, int8_t>(file, &params);
+    } else if(params.write_type == RWTYPES::FLOAT32) {
+      exit_code = load_file_and_play<double_t, float_t>(file, &params);
+    } else if(params.write_type == RWTYPES::FLOAT64) {
+      exit_code = load_file_and_play<double_t, double_t>(file, &params);
+    } else {
+      exit_code = load_file_and_play<double_t, int16_t>(file, &params);
+    }
+  } else {
+    if(params.write_type == RWTYPES::INT8) {
+      exit_code = load_file_and_play<int16_t, int8_t>(file, &params);
+    } else if(params.write_type == RWTYPES::FLOAT32) {
+      exit_code = load_file_and_play<int16_t, float_t>(file, &params);
+    } else if(params.write_type == RWTYPES::FLOAT64) {
+      exit_code = load_file_and_play<int16_t, double_t>(file, &params);
+    } else {
+      exit_code = load_file_and_play<int16_t, int16_t>(file, &params);
+    }
+  }
 
-
-
-  return load_file_and_play<int16_t, int16_t>(file, &params) ;
-
+  return exit_code;
 }
