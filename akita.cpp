@@ -262,7 +262,7 @@ int main(int ac, char *av[]) {
             << file.samplerate() << "Hz, " << file.frames() << " frames.\n"
             << std::endl;
 
-  std::cout << " Current Parameters... " << std::endl;
+  std::cout << "Current Parameters:" << std::endl;
   std::cout << "  Read type:     " << params.read_type << std::endl;
   std::cout << "  Write type:    " << params.write_type << std::endl;
   std::cout << "  Stream type:   " << params.stream_type << std::endl;
