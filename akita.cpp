@@ -115,8 +115,8 @@ po::options_description init_opts(int ac, char *av[], po::variables_map *vm,
       ("help", "Display this help!")
       ("input-file", po::value<std::string>(), "The input file - WAV!")
       ("sample-repeat", po::value<float>(), "Repeat every sample n times!")
-      ("buffer-cut", po::value<float>(), "Don't fill output buffer completely!")
-      ("offset-cut", po::value<float>(), "Modify offset increment (chunk size read from buffer)!")
+      ("buffer-mod", po::value<float>(), "Don't fill output buffer completely!")
+      ("offset-mod", po::value<float>(), "Modify offset increment (chunk size read from buffer)!")
       ("read-type", po::value<RWTYPES>(&(*params).read_type)->default_value(SHORT), "Type used to read from audio file!")
       ("write-type", po::value<RWTYPES>(&(*params).write_type)->default_value(SHORT), "Type used to write to audio buffer!")
       ("stream-type", po::value<RWTYPES>(&(*params).stream_type)->default_value(SHORT), "Type used for the audio stream!")
@@ -248,13 +248,13 @@ int main(int ac, char *av[]) {
   }
 
   params.buffer_cut = (float)file.channels();
-  if (vm.count("buffer-cut")) {
-    params.buffer_cut = vm["buffer-cut"].as<float>();
+  if (vm.count("buffer-mod")) {
+    params.buffer_cut = vm["buffer-mod"].as<float>();
   }
 
   params.offset_cut = (float)file.channels();
-  if (vm.count("offset-cut")) {
-    params.offset_cut = vm["offset-cut"].as<float>();
+  if (vm.count("offset-mod")) {
+    params.offset_cut = vm["offset-mod"].as<float>();
   }
 
   // display some file info ...
@@ -267,8 +267,8 @@ int main(int ac, char *av[]) {
   std::cout << "  Write type:    " << params.write_type << std::endl;
   std::cout << "  Stream type:   " << params.stream_type << std::endl;
   std::cout << "  Sample repeat: " << params.sample_repeat << std::endl;
-  std::cout << "  Buffer cut:    " << params.buffer_cut << std::endl;
-  std::cout << "  Offset cut:    " << params.offset_cut << std::endl;
+  std::cout << "  Buffer mod:    " << params.buffer_cut << std::endl;
+  std::cout << "  Offset mod:    " << params.offset_cut << std::endl;
 
   // ok, here it get's a little awkward ... a dynamically-typed language would
   // come
