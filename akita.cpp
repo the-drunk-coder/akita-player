@@ -13,6 +13,13 @@ namespace po = boost::program_options;
 // format enum
 enum RWTYPES { UCHAR, SHORT, FLOAT, DOUBLE };
 
+std::map <RWTYPES, std::string> rwtypes_strings {
+  { UCHAR, "uchar (8 Bit)" },
+  { SHORT, "short (16 Bit)" },
+  { FLOAT, "float (32 Bit)" },
+  { DOUBLE, "double (64 Bit)" },
+};
+
 // parameters struct
 struct params_to_abuse {
   float buffer_cut;
@@ -128,7 +135,7 @@ po::options_description init_opts(int ac, char *av[], po::variables_map *vm,
 
   po::store(po::command_line_parser(ac, av).options(desc).positional(p).run(),*vm);
   po::notify(*vm);
-  
+
   return desc;
 }
 
@@ -263,9 +270,9 @@ int main(int ac, char *av[]) {
             << std::endl;
 
   std::cout << "Current Parameters:" << std::endl;
-  std::cout << "  Read type:     " << params.read_type << std::endl;
-  std::cout << "  Write type:    " << params.write_type << std::endl;
-  std::cout << "  Stream type:   " << params.stream_type << std::endl;
+  std::cout << "  Read type:     " << rwtypes_strings[params.read_type] << std::endl;
+  std::cout << "  Write type:    " << rwtypes_strings[params.write_type] << std::endl;
+  std::cout << "  Stream type:   " << rwtypes_strings[params.stream_type] << std::endl;
   std::cout << "  Sample repeat: " << params.sample_repeat << std::endl;
   std::cout << "  Buffer mod:    " << params.buffer_cut << std::endl;
   std::cout << "  Offset mod:    " << params.offset_cut << std::endl;
