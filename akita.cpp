@@ -126,9 +126,9 @@ po::options_description init_opts(int ac, char *av[], po::variables_map *vm,
   po::positional_options_description p;
   p.add("input-file", -1);
 
-  po::store(po::command_line_parser(ac, av).options(desc).positional(p).run(),
-            *vm);
+  po::store(po::command_line_parser(ac, av).options(desc).positional(p).run(),*vm);
   po::notify(*vm);
+  
   return desc;
 }
 
