@@ -210,9 +210,7 @@ int load_file_and_play(SndfileHandle file, params_to_abuse *params) {
 */
 int main(int ac, char *av[]) {
   // Salutations!
-  std::cout
-      << "\n~~ akita - create noise abusing low-level audio parameters! ~~\n"
-      << std::endl;
+  std::cout << "\n~~ akita - create noise abusing low-level audio parameters! ~~\n" << std::endl;
 
   // get params to abuse ...
   params_to_abuse params;
@@ -225,6 +223,11 @@ int main(int ac, char *av[]) {
   if (vm.count("help")) {
     std::cout << "usage: akita <file> [options] \n" << std::endl;
     std::cout << desc;
+    std::cout << "\nRead/Write/Stream types options:" << std::endl;
+    std::cout << "  uchar      8 Bit, unsigned char (not possible as read type!)" << std::endl;
+    std::cout << "  short      16 Bit, short (default)" << std::endl;
+    std::cout << "  float      32 Bit, float" << std::endl;
+    std::cout << "  double     64 Bit, double" << std::endl;
     return 0;
   }
 
@@ -259,13 +262,13 @@ int main(int ac, char *av[]) {
             << file.samplerate() << "Hz, " << file.frames() << " frames.\n"
             << std::endl;
 
-  std::cout << "Parameters... " << std::endl;
-  std::cout << "Read type:     " << params.read_type << std::endl;
-  std::cout << "Write type:    " << params.write_type << std::endl;
-  std::cout << "Stream type:   " << params.stream_type << std::endl;
-  std::cout << "Sample repeat: " << params.sample_repeat << std::endl;
-  std::cout << "Buffer cut:    " << params.buffer_cut << std::endl;
-  std::cout << "Offset cut:    " << params.offset_cut << std::endl;
+  std::cout << " Current Parameters... " << std::endl;
+  std::cout << "  Read type:     " << params.read_type << std::endl;
+  std::cout << "  Write type:    " << params.write_type << std::endl;
+  std::cout << "  Stream type:   " << params.stream_type << std::endl;
+  std::cout << "  Sample repeat: " << params.sample_repeat << std::endl;
+  std::cout << "  Buffer cut:    " << params.buffer_cut << std::endl;
+  std::cout << "  Offset cut:    " << params.offset_cut << std::endl;
 
   // ok, here it get's a little awkward ... a dynamically-typed language would
   // come
