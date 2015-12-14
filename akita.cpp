@@ -13,6 +13,7 @@ namespace po = boost::program_options;
 // format enum
 enum RWTYPES { UCHAR, SHORT, FLOAT, DOUBLE };
 
+// map enable nicer type output ...
 std::map <RWTYPES, std::string> rwtypes_strings {
   { UCHAR, "uchar (8 Bit)" },
   { SHORT, "short (16 Bit)" },
@@ -31,7 +32,8 @@ struct params_to_abuse {
 };
 
 // file container to communicate with callback function
-template <typename READ_TYPE> class file_container {
+template <typename READ_TYPE>
+class file_container {
 public:
   file_container(SndfileHandle file) {
     samples = file.frames() * file.channels();
@@ -57,9 +59,9 @@ template <typename READ_TYPE, typename WRITE_TYPE>
 int abusive_play(void *outputBuffer, void *inputBuffer,
                  unsigned int nBufferFrames, double streamTime,
                  RtAudioStreamStatus status, void *userData) {
+
   // get the parameter container from the user data ...
-  file_container<READ_TYPE> *fc =
-      reinterpret_cast<file_container<READ_TYPE> *>(userData);
+  file_container<READ_TYPE> *fc = reinterpret_cast<file_container<READ_TYPE> *>(userData);
   params_to_abuse *params = fc->params;
   WRITE_TYPE *out_buf = (WRITE_TYPE *)outputBuffer;
 
@@ -278,8 +280,7 @@ int main(int ac, char *av[]) {
   std::cout << "  Offset mod:    " << params.offset_cut << std::endl;
 
   // ok, here it get's a little awkward ... a dynamically-typed language would
-  // come
-  // in handy here ...
+  // come in handy here ...
   int exit_code = 0;
 
   if (params.read_type == FLOAT) {
