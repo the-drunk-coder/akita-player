@@ -12,3 +12,5 @@ Can be used like an audio player (for WAV or FLAC), but with a little twist, as 
 For notes on usage, type s.th. like once you've compiled it !
 
 ```./akita --help```
+
+This software is public domain !
