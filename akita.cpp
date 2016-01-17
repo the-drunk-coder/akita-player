@@ -4,15 +4,22 @@
 #include <sndfile.hh>
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
+#include <boost/lockfree/spsc_queue.hpp>
 #include "RtAudio.h"
 
 namespace po = boost::program_options;
+namespace lfree = boost::lockfree;
 
 #define CHUNKSIZE 1024
 
 // format enum
 enum RWTYPES { UCHAR, SHORT, FLOAT, DOUBLE };
 
+namespace PSTATE{
+  enum PSTATE  { PLAY, LOOP_REC, LOOP, SILENCE };
+}
+
+// a little map to display the enum as strings ...
 std::map <RWTYPES, std::string> rwtypes_strings {
   { UCHAR, "uchar (8 Bit)" },
   { SHORT, "short (16 Bit)" },
@@ -30,26 +37,37 @@ struct params_to_abuse {
   RWTYPES stream_type;
 };
 
+
+
+struct play_params {
+  // loop params
+  lfree::spsc_queue<PSTATE::PSTATE>* cmd_queue;
+  PSTATE::PSTATE state;
+  bool loop;
+  long int loop_start;
+  long int loop_end;
+  long int offset;
+};
+
 // file container to communicate with callback function
-template <typename READ_TYPE> class file_container {
+template <typename READ_TYPE>
+class file_container {
 public:
   file_container(SndfileHandle file) {
     samples = file.frames() * file.channels();
     file_buffer = new READ_TYPE[samples];
-
-    offset = 0;
     channels = file.channels();
   }
 
   ~file_container() { delete[] file_buffer; }
 
   READ_TYPE *file_buffer;
-  long int offset;
   long int samples;
   short channels;
 
   // the params to make things weird!
   params_to_abuse *params;
+  play_params *pp;
 };
 
 // the parameterized callback function ...
@@ -58,27 +76,43 @@ int abusive_play(void *outputBuffer, void *inputBuffer,
                  unsigned int nBufferFrames, double streamTime,
                  RtAudioStreamStatus status, void *userData) {
   // get the parameter container from the user data ...
-  file_container<READ_TYPE> *fc =
-      reinterpret_cast<file_container<READ_TYPE> *>(userData);
+  file_container<READ_TYPE> *fc = reinterpret_cast<file_container<READ_TYPE> *>(userData);
   params_to_abuse *params = fc->params;
+  play_params *pp = fc->pp;
+  lfree::spsc_queue<PSTATE::PSTATE> *cmd_queue = pp->cmd_queue;
   WRITE_TYPE *out_buf = (WRITE_TYPE *)outputBuffer;
 
-  if (status) {
-    std::cout << "Stream underflow detected!" << std::endl;
+  //get new play state ...
+  PSTATE::PSTATE new_state;
+  while(cmd_queue->pop(&new_state)){
+      pp->state = new_state;
   }
+  
+  if (status) { std::cout << "Stream underflow detected!" << std::endl; }
 
+  // SILENCE ! I KILL YOU !!
+  if (pp->state == PSTATE::SILENCE) {
+    for (int i = 0; i < nBufferFrames * params->buffer_cut; i++) {
+      *out_buf++ = 0;
+    }
+    return 0;
+  }
+  
   // transfer samples from file buffer to output !
   for (int i = 0; i < nBufferFrames * params->buffer_cut; i++) {
     for (float j = 0; j < params->sample_repeat; j += 1.0) {
-      if (fc->offset + i > fc->samples) {
-        fc->offset = 0;
+      if (pp->offset + i > fc->samples) {
+        pp->offset = 0;
       }
-      *out_buf++ = fc->file_buffer[fc->offset + i];
+      *out_buf++ = fc->file_buffer[pp->offset + i];
     }
   }
 
   // increament read offest
-  fc->offset += nBufferFrames * params->offset_cut;
+  pp->offset += nBufferFrames * params->offset_cut;
+
+  
+
   return 0;
 }
 
@@ -120,7 +154,7 @@ po::options_description init_opts(int ac, char *av[], po::variables_map *vm,
   po::options_description desc("Parameters to use in a creative way");
   desc.add_options()
       ("help", "Display this help!")
-      ("input-file", po::value<std::string>(), "The input file - WAV!")
+      ("input-file", po::value<std::string>(), "The input file - WAV of FLAC!")
       ("sample-repeat", po::value<float>(), "Repeat every sample n times!")
       ("buffer-mod", po::value<float>(), "Don't fill output buffer completely!")
       ("offset-mod", po::value<float>(), "Modify offset increment (chunk size read from buffer)!")
@@ -140,10 +174,11 @@ po::options_description init_opts(int ac, char *av[], po::variables_map *vm,
 }
 
 template <typename READ_TYPE, typename WRITE_TYPE>
-int load_file_and_play(SndfileHandle file, params_to_abuse *params) {
+int load_file_and_play(SndfileHandle file, params_to_abuse *params, play_params *pp, RtAudio *dac) {
 
   file_container<READ_TYPE> *fc = new file_container<READ_TYPE>(file);
   fc->params = params;
+  fc->pp = pp;
 
   int frame_chunksize = CHUNKSIZE * file.channels();
   READ_TYPE *chunk_buffer = new READ_TYPE[frame_chunksize];
@@ -159,14 +194,13 @@ int load_file_and_play(SndfileHandle file, params_to_abuse *params) {
   // not needed any longer !
   delete[] chunk_buffer;
 
-  RtAudio dac;
-  if (dac.getDeviceCount() < 1) {
+  if (dac->getDeviceCount() < 1) {
     std::cout << "\nNo audio devices found!\n";
     return 0;
   }
 
   RtAudio::StreamParameters parameters;
-  parameters.deviceId = dac.getDefaultOutputDevice();
+  parameters.deviceId = dac->getDefaultOutputDevice();
   parameters.nChannels = 2;
   parameters.firstChannel = 0;
   unsigned int sampleRate = 44100;
@@ -174,40 +208,28 @@ int load_file_and_play(SndfileHandle file, params_to_abuse *params) {
 
   try {
     if (params->stream_type == UCHAR) {
-      dac.openStream(&parameters, NULL, RTAUDIO_SINT8, sampleRate,
+      dac->openStream(&parameters, NULL, RTAUDIO_SINT8, sampleRate,
                      &bufferFrames, &abusive_play<READ_TYPE, WRITE_TYPE>,
                      (void *)fc);
     } else if (params->stream_type == FLOAT) {
-      dac.openStream(&parameters, NULL, RTAUDIO_FLOAT32, sampleRate,
+      dac->openStream(&parameters, NULL, RTAUDIO_FLOAT32, sampleRate,
                      &bufferFrames, &abusive_play<READ_TYPE, WRITE_TYPE>,
                      (void *)fc);
     } else if (params->stream_type == DOUBLE) {
-      dac.openStream(&parameters, NULL, RTAUDIO_FLOAT64, sampleRate,
+      dac->openStream(&parameters, NULL, RTAUDIO_FLOAT64, sampleRate,
                      &bufferFrames, &abusive_play<READ_TYPE, WRITE_TYPE>,
                      (void *)fc);
     } else {
       // this is probably the most commom option
-      dac.openStream(&parameters, NULL, RTAUDIO_SINT16, sampleRate,
+      dac->openStream(&parameters, NULL, RTAUDIO_SINT16, sampleRate,
                      &bufferFrames, &abusive_play<READ_TYPE, WRITE_TYPE>,
                      (void *)fc);
     }
-    dac.startStream();
+    dac->startStream();
   } catch (RtAudioError &e) {
     e.printMessage();
     return 0;
   }
-
-  char input;
-  std::cout << "\nPlaying ... press <enter> to quit.\n";
-  std::cin.get(input);
-  try {
-    // Stop the stream
-    dac.stopStream();
-  } catch (RtAudioError &e) {
-    e.printMessage();
-  }
-  if (dac.isStreamOpen())
-    dac.closeStream();
 
   return 0;
 }
@@ -277,42 +299,87 @@ int main(int ac, char *av[]) {
   std::cout << "  Buffer mod:    " << params.buffer_cut << std::endl;
   std::cout << "  Offset mod:    " << params.offset_cut << std::endl;
 
+  lfree::spsc_queue<PSTATE::PSTATE> cmd_queue(10);
+  
+  // play params, for looping etc ...
+  play_params pp;
+
+  pp.state = PSTATE::PLAY; 
+  pp.cmd_queue = &cmd_queue;
+  pp.loop = false;
+  pp.loop_start = 0;
+  pp.loop_end = 0;
+  pp.offset = 0;
+
   // ok, here it get's a little awkward ... a dynamically-typed language would
   // come
   // in handy here ...
   int exit_code = 0;
 
+  RtAudio dac;
   if (params.read_type == FLOAT) {
     if (params.write_type == UCHAR) {
-      exit_code = load_file_and_play<float_t, int8_t>(file, &params);
+      exit_code = load_file_and_play<float_t, int8_t>(file, &params, &pp, &dac);
     } else if (params.write_type == FLOAT) {
-      exit_code = load_file_and_play<float_t, float_t>(file, &params);
+      exit_code = load_file_and_play<float_t, float_t>(file, &params, &pp, &dac);
     } else if (params.write_type == DOUBLE) {
-      exit_code = load_file_and_play<float_t, double_t>(file, &params);
+      exit_code = load_file_and_play<float_t, double_t>(file, &params, &pp, &dac);
     } else {
-      exit_code = load_file_and_play<float_t, int16_t>(file, &params);
+      exit_code = load_file_and_play<float_t, int16_t>(file, &params, &pp, &dac);
     }
   } else if (params.read_type == DOUBLE) {
     if (params.write_type == UCHAR) {
-      exit_code = load_file_and_play<double_t, int8_t>(file, &params);
+      exit_code = load_file_and_play<double_t, int8_t>(file, &params, &pp, &dac);
     } else if (params.write_type == FLOAT) {
-      exit_code = load_file_and_play<double_t, float_t>(file, &params);
+      exit_code = load_file_and_play<double_t, float_t>(file, &params, &pp, &dac);
     } else if (params.write_type == DOUBLE) {
-      exit_code = load_file_and_play<double_t, double_t>(file, &params);
+      exit_code = load_file_and_play<double_t, double_t>(file, &params, &pp, &dac);
     } else {
-      exit_code = load_file_and_play<double_t, int16_t>(file, &params);
+      exit_code = load_file_and_play<double_t, int16_t>(file, &params, &pp, &dac);
     }
   } else {
     if (params.write_type == UCHAR) {
-      exit_code = load_file_and_play<int16_t, int8_t>(file, &params);
+      exit_code = load_file_and_play<int16_t, int8_t>(file, &params, &pp, &dac);
     } else if (params.write_type == FLOAT) {
-      exit_code = load_file_and_play<int16_t, float_t>(file, &params);
+      exit_code = load_file_and_play<int16_t, float_t>(file, &params, &pp, &dac);
     } else if (params.write_type == DOUBLE) {
-      exit_code = load_file_and_play<int16_t, double_t>(file, &params);
+      exit_code = load_file_and_play<int16_t, double_t>(file, &params, &pp, &dac);
     } else {
-      exit_code = load_file_and_play<int16_t, int16_t>(file, &params);
+      exit_code = load_file_and_play<int16_t, int16_t>(file, &params, &pp, &dac);
     }
   }
 
+  char input;
+  std::cout << "\nPlaying ... press q to quit.\n";
+  bool get_input = true;
+  while(get_input ){
+  std::cin.get(input);
+  switch(input) {
+  case 'q':
+    try {
+      // Stop the stream
+      dac.stopStream();
+    } catch (RtAudioError &e) {
+      e.printMessage();
+    }
+    if (dac.isStreamOpen())
+      dac.closeStream();
+    get_input = false;
+    break;
+  case 's':
+    //PSTATE::PSTATE new_state = PSTATE::SILENCE;
+    cmd_queue.push(PSTATE::SILENCE);
+    break;
+  case 'p':
+    //PSTATE::PSTATE new_state = PSTATE::SILENCE;
+    cmd_queue.push(PSTATE::PLAY);
+    break;
+  case 'o':
+    std::cout << pp.offset << std::endl;
+    break;
+  default:
+    std::cout << "COMMAND NOT ACCEPTED!" << std::endl;
+   }
+  }
   return exit_code;
 }
