@@ -5,10 +5,12 @@
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/lockfree/spsc_queue.hpp>
+#include <boost/interprocess/ipc/message_queue.hpp>
 #include "RtAudio.h"
 
 namespace po = boost::program_options;
 namespace lfree = boost::lockfree;
+namespace iproc = boost::interprocess;
 
 #define CHUNKSIZE 1024
 
@@ -18,8 +20,8 @@ enum RWTYPES { UCHAR, SHORT, FLOAT, DOUBLE };
 namespace PSTATE{
   enum PSTATE  { PLAY, LOOP_REC, LOOP, SILENCE };
 }
-
-// a little map to display the enum as strings ...
+  
+// map enable nicer type output ...
 std::map <RWTYPES, std::string> rwtypes_strings {
   { UCHAR, "uchar (8 Bit)" },
   { SHORT, "short (16 Bit)" },
@@ -36,7 +38,6 @@ struct params_to_abuse {
   RWTYPES write_type;
   RWTYPES stream_type;
 };
-
 
 
 struct play_params {
@@ -67,6 +68,7 @@ public:
 
   // the params to make things weird!
   params_to_abuse *params;
+
   play_params *pp;
 };
 
@@ -75,6 +77,7 @@ template <typename READ_TYPE, typename WRITE_TYPE>
 int abusive_play(void *outputBuffer, void *inputBuffer,
                  unsigned int nBufferFrames, double streamTime,
                  RtAudioStreamStatus status, void *userData) {
+
   // get the parameter container from the user data ...
   file_container<READ_TYPE> *fc = reinterpret_cast<file_container<READ_TYPE> *>(userData);
   params_to_abuse *params = fc->params;
@@ -109,9 +112,8 @@ int abusive_play(void *outputBuffer, void *inputBuffer,
   }
 
   // increament read offest
-  pp->offset += nBufferFrames * params->offset_cut;
 
-  
+  pp->offset += nBufferFrames * params->offset_cut;
 
   return 0;
 }
@@ -161,6 +163,7 @@ po::options_description init_opts(int ac, char *av[], po::variables_map *vm,
       ("read-type", po::value<RWTYPES>(&(*params).read_type)->default_value(SHORT), "Type used to read from audio file!")
       ("write-type", po::value<RWTYPES>(&(*params).write_type)->default_value(SHORT), "Type used to write to audio buffer!")
       ("stream-type", po::value<RWTYPES>(&(*params).stream_type)->default_value(SHORT), "Type used for the audio stream!")
+      ("cmd-queue", po::value<std::string>(), "Command Queue")
   ;
   // ----- end options ... what kind of syntax is this ??
 
@@ -200,6 +203,7 @@ int load_file_and_play(SndfileHandle file, params_to_abuse *params, play_params 
   }
 
   RtAudio::StreamParameters parameters;
+
   parameters.deviceId = dac->getDefaultOutputDevice();
   parameters.nChannels = 2;
   parameters.firstChannel = 0;
@@ -231,8 +235,10 @@ int load_file_and_play(SndfileHandle file, params_to_abuse *params, play_params 
     return 0;
   }
 
+
   return 0;
 }
+
 
 /*
 * MAIN ROUTINE!!
@@ -286,6 +292,26 @@ int main(int ac, char *av[]) {
     params.offset_cut = vm["offset-mod"].as<float>();
   }
 
+  bool use_stdout = true;
+  std::string cmd_queue_name = "";
+  iproc::message_queue* in_q;
+  if (vm.count("cmd-queue")) {
+    cmd_queue_name = vm["cmd-queue"].as<std::string>();
+    if(cmd_queue_name.size() == 0){
+      std::cout << "Please enter command queue name !" << std::endl;
+      return 0;
+    }
+    use_stdout = false;
+    in_q = new iproc::message_queue
+      (iproc::open_or_create        //only create
+       ,cmd_queue_name.c_str()       //name
+       ,100
+       ,sizeof(char)
+       );
+
+  }
+
+  
   // display some file info ...
   std::cout << "Input file: " << fname << ", " << file.channels() << "ch, "
             << file.samplerate() << "Hz, " << file.frames() << " frames.\n"
@@ -349,37 +375,48 @@ int main(int ac, char *av[]) {
     }
   }
 
-  char input;
-  std::cout << "\nPlaying ... press q to quit.\n";
-  bool get_input = true;
-  while(get_input ){
-  std::cin.get(input);
-  switch(input) {
-  case 'q':
-    try {
-      // Stop the stream
-      dac.stopStream();
-    } catch (RtAudioError &e) {
-      e.printMessage();
+
+  
+    char input;
+    std::cout << "\nPlaying ... press q to quit.\n";
+    bool get_input = true;
+    while(get_input){
+      if(use_stdout){
+	std::cin.get(input);
+      } else {
+	unsigned int priority;
+	iproc::message_queue::size_type recvd_size;
+	in_q->receive(&input , sizeof(input ), recvd_size, priority);
+      }
+
+      switch(input) {
+      case 'q':
+	try {
+	  // Stop the stream
+	  dac.stopStream();
+	} catch (RtAudioError &e) {
+	  e.printMessage();
+	}
+	if (dac.isStreamOpen())
+	  dac.closeStream();
+	get_input = false;
+	break;
+      case 's':
+	//PSTATE::PSTATE new_state = PSTATE::SILENCE;
+	cmd_queue.push(PSTATE::SILENCE);
+	break;
+      case 'p':
+	//PSTATE::PSTATE new_state = PSTATE::SILENCE;
+	cmd_queue.push(PSTATE::PLAY);
+	break;
+      case 'o':
+	std::cout << pp.offset << std::endl;
+	break;
+      default:
+	std::cout << "COMMAND NOT ACCEPTED!" << std::endl;
+      }
     }
-    if (dac.isStreamOpen())
-      dac.closeStream();
-    get_input = false;
-    break;
-  case 's':
-    //PSTATE::PSTATE new_state = PSTATE::SILENCE;
-    cmd_queue.push(PSTATE::SILENCE);
-    break;
-  case 'p':
-    //PSTATE::PSTATE new_state = PSTATE::SILENCE;
-    cmd_queue.push(PSTATE::PLAY);
-    break;
-  case 'o':
-    std::cout << pp.offset << std::endl;
-    break;
-  default:
-    std::cout << "COMMAND NOT ACCEPTED!" << std::endl;
-   }
-  }
+  
+  
   return exit_code;
 }
