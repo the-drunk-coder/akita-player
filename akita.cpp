@@ -5,6 +5,7 @@
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/lockfree/spsc_queue.hpp>
+#include "getch.h"
 #include "RtAudio.h"
 
 namespace po = boost::program_options;
@@ -16,7 +17,11 @@ namespace lfree = boost::lockfree;
 enum RWTYPES { UCHAR, SHORT, FLOAT, DOUBLE };
 
 namespace PSTATE{
-  enum PSTATE  { PLAY, LOOP_REC, LOOP, SILENCE };
+  enum PSTATE { PLAY, LOOP_REC, LOOP, SILENCE };
+}
+
+namespace COMMAND {
+  enum COMMAND { STATE_CHANGE, GAIN_CHANGE, LOOP_INIT, LOOP_FINISH };
 }
 
 // map enable nicer type output ...
@@ -37,11 +42,17 @@ struct params_to_abuse {
   RWTYPES stream_type;
 };
 
+struct command_container {
+  COMMAND::COMMAND cmd;
+  PSTATE::PSTATE new_state;
+  float new_gain;
+};
+
 struct play_params {
   // loop params
-  lfree::spsc_queue<PSTATE::PSTATE>* cmd_queue;
+  lfree::spsc_queue<command_container>* cmd_queue;
   PSTATE::PSTATE state;
-  bool loop;
+  double gain;
   long int loop_start;
   long int loop_end;
   long int offset;
@@ -80,13 +91,30 @@ int abusive_play(void *outputBuffer, void *inputBuffer,
   params_to_abuse *params = fc->params;
 
   play_params *pp = fc->pp;
-  lfree::spsc_queue<PSTATE::PSTATE> *cmd_queue = pp->cmd_queue;
+  lfree::spsc_queue<command_container> *cmd_queue = pp->cmd_queue;
   WRITE_TYPE *out_buf = (WRITE_TYPE *)outputBuffer;
 
-  //get new play state ...
-  PSTATE::PSTATE new_state;
-  while(cmd_queue->pop(&new_state)){
-    pp->state = new_state;
+  // handle commands
+  command_container cont;
+  while(cmd_queue->pop(&cont)){
+    //std::cout << "rec cmd" << std::endl;
+    if(cont.cmd == COMMAND::STATE_CHANGE){
+      pp->state = cont.new_state;
+    } else if(cont.cmd == COMMAND::GAIN_CHANGE){
+      //std::cout << "gain" << std::endl;
+      pp->gain = cont.new_gain;
+      if(pp->gain > 1.0){
+	pp->gain = 1.0;
+      } else if (pp->gain < 0.0)  {
+	pp->gain = 0.0;
+      }
+    } else if(cont.cmd == COMMAND::LOOP_INIT) {
+      pp->loop_start = pp->offset;
+      pp->state = PSTATE::LOOP_REC;
+    } else if(cont.cmd == COMMAND::LOOP_FINISH) {
+      pp->loop_end = pp->offset;
+      pp->state = PSTATE::LOOP;
+    }
   }
 
   if (status) { std::cout << "Stream underflow detected!" << std::endl; }
@@ -96,6 +124,7 @@ int abusive_play(void *outputBuffer, void *inputBuffer,
     for (int i = 0; i < nBufferFrames * params->buffer_cut; i++) {
       *out_buf++ = 0;
     }
+    // in this case, offset won't be modified
     return 0;
   }
 
@@ -105,13 +134,16 @@ int abusive_play(void *outputBuffer, void *inputBuffer,
       if (pp->offset + i > fc->samples) {
         pp->offset = 0;
       }
-      *out_buf++ = fc->file_buffer[pp->offset + i];
+      *out_buf++ = fc->file_buffer[pp->offset + i] * pp->gain;
     }
   }
 
   // increament read offest
   pp->offset += nBufferFrames * params->offset_cut;
-
+  if((pp->state == PSTATE::LOOP) && (pp->offset >= pp->loop_end)){
+    pp->offset = pp->loop_start;
+  }
+  
   return 0;
 }
 
@@ -207,7 +239,6 @@ int load_file_and_play(SndfileHandle file, params_to_abuse *params, play_params 
 
   try {
     if (params->stream_type == UCHAR) {
-
       dac->openStream(&parameters, NULL, RTAUDIO_SINT8, sampleRate,
 		      &bufferFrames, &abusive_play<READ_TYPE, WRITE_TYPE>,
 		      (void *)fc);
@@ -299,14 +330,14 @@ int main(int ac, char *av[]) {
   std::cout << "  Buffer mod:    " << params.buffer_cut << std::endl;
   std::cout << "  Offset mod:    " << params.offset_cut << std::endl;
 
-  lfree::spsc_queue<PSTATE::PSTATE> cmd_queue(10);
+  lfree::spsc_queue<command_container> cmd_queue(10);
 
   // play params, for looping etc ...
   play_params pp;
 
+  pp.gain = 0.001;
   pp.state = PSTATE::PLAY;
   pp.cmd_queue = &cmd_queue;
-  pp.loop = false;
   pp.loop_start = 0;
   pp.loop_end = 0;
   pp.offset = 0;
@@ -349,42 +380,60 @@ int main(int ac, char *av[]) {
     }
   }
 
-
-
   char input;
   std::cout << "\nPlaying ... press q to quit.\n";
-  bool get_input = true;
-  while(get_input){
-    std::cin.get(input);
+  // main loop
+  while((input = getch()) != 'q'){   
+    command_container cont;
     switch(input) {
-      case 'q':
-        try {
-	        // Stop the stream
-	        dac.stopStream();
-        } catch (RtAudioError &e) {
-	         e.printMessage();
-        }
-
-        if (dac.isStreamOpen())
-	       dac.closeStream();
-
-        get_input = false;
-        break;
+    case 'd':
+      std::cout << "gain up" << std::endl;
+      cont.cmd = COMMAND::GAIN_CHANGE;
+      cont.new_gain = pp.gain + 0.001;      
+      cmd_queue.push(cont);
+      break;
+    case 'c':
+      std::cout << "gain down" << std::endl;
+      cont.cmd = COMMAND::GAIN_CHANGE;      
+      cont.new_gain = pp.gain - 0.001;
+      cmd_queue.push(cont);
+      break;
     case 's':
-      //PSTATE::PSTATE new_state = PSTATE::SILENCE;
-      cmd_queue.push(PSTATE::SILENCE);
+      cont.cmd = COMMAND::STATE_CHANGE;
+      cont.new_state = PSTATE::SILENCE;
+      cmd_queue.push(cont);
       break;
     case 'p':
-      //PSTATE::PSTATE new_state = PSTATE::SILENCE;
-      cmd_queue.push(PSTATE::PLAY);
+      cont.cmd = COMMAND::STATE_CHANGE;
+      cont.new_state = PSTATE::PLAY;
+      cmd_queue.push(cont);
       break;
-    case 'o':
-      std::cout << pp.offset << std::endl;
+    case ' ':
+      if(pp.state == PSTATE::PLAY){
+	cont.cmd = COMMAND::LOOP_INIT;
+	std::cout << "loop from: " << pp.offset << std::endl;
+      } else if (pp.state == PSTATE::LOOP_REC) {
+	cont.cmd = COMMAND::LOOP_FINISH;
+	std::cout << "loop to: " << pp.offset << std::endl;
+      }
+      cmd_queue.push(cont);
       break;
     default:
       std::cout << "COMMAND NOT ACCEPTED!" << std::endl;
     }
   }
 
+  // on exit, close stream  
+  try {
+    // Stop the stream
+    dac.stopStream();
+  } catch (RtAudioError &e) {
+    e.printMessage();
+  }
+  
+  if (dac.isStreamOpen()) {
+    dac.closeStream();
+  }
+  
   return exit_code;
 }
