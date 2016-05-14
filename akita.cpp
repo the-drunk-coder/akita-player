@@ -7,6 +7,9 @@
 #include <boost/lockfree/spsc_queue.hpp>
 #include "getch.h"
 #include "RtAudio.h"
+#include <cmath>
+#include <mutex>              
+#include <condition_variable>
 
 namespace po = boost::program_options;
 namespace lfree = boost::lockfree;
@@ -17,7 +20,7 @@ namespace lfree = boost::lockfree;
 enum RWTYPES { UCHAR, SHORT, FLOAT, DOUBLE };
 
 namespace PSTATE{
-  enum PSTATE { PLAY, LOOP_REC, LOOP, SILENCE };
+  enum PSTATE { PLAY, LOOP_REC, LOOP, LOOP_SILENCE, LOOP_BLOCK, SILENCE, BLOCK };
 }
 
 namespace COMMAND {
@@ -48,10 +51,48 @@ struct command_container {
   float new_gain;
 };
 
+// naive state variable filter, modeled after DAFx Chapter 2
+struct state_variable_filter {
+  state_variable_filter(double frequency, double q, int samplerate){
+    q1 = 1.0 / q;
+    f1 = 2 * sin(M_PI * frequency / samplerate);
+    del_lp = 0.0;
+    del_bp = 0.0;
+    hp = 0.0;
+    lp = 0.0;
+    bp = 0.0;
+  }
+
+  //double frequency;
+  //double q;
+  double q1;
+  double f1;
+
+  //delays
+  double del_lp;
+  double del_bp;
+
+  // current
+  double hp;
+  double bp;
+  double lp;
+
+  void calculate(double sample){
+    hp = sample - del_lp - q1 * del_bp;
+    bp = f1 * hp + del_bp;
+    lp = f1 * bp + del_lp;
+    del_bp = bp;
+    del_lp = lp;
+  }
+};
+
+
 struct play_params {
   // loop params
   lfree::spsc_queue<command_container>* cmd_queue;
   PSTATE::PSTATE state;
+  state_variable_filter* filter_l;
+  state_variable_filter* filter_r; 
   double gain;
   long int loop_start;
   long int loop_end;
@@ -75,10 +116,14 @@ public:
   short channels;
 
   // the params to make things weird!
-  params_to_abuse *params;
+  params_to_abuse *params; 
 
   play_params *pp;
 };
+
+// this is bad ... 
+std::mutex mtx;
+std::condition_variable cv;
 
 // the parameterized callback function ...
 template <typename READ_TYPE, typename WRITE_TYPE>
@@ -117,10 +162,16 @@ int abusive_play(void *outputBuffer, void *inputBuffer,
     }
   }
 
+  if(pp->state == PSTATE::BLOCK){
+    std::unique_lock<std::mutex> lck(mtx);
+    cv.wait(lck);
+    return 0;
+  }
+
   if (status) { std::cout << "Stream underflow detected!" << std::endl; }
 
   // SILENCE ! I KILL YOU !!
-  if (pp->state == PSTATE::SILENCE) {
+  if (pp->state == PSTATE::SILENCE || pp->state == PSTATE::LOOP_SILENCE) {
     for (int i = 0; i < nBufferFrames * params->buffer_cut; i++) {
       *out_buf++ = 0;
     }
@@ -128,13 +179,26 @@ int abusive_play(void *outputBuffer, void *inputBuffer,
     return 0;
   }
 
+  short filter_flag = 0;
+  READ_TYPE out_sample;
   // transfer samples from file buffer to output !
   for (int i = 0; i < nBufferFrames * params->buffer_cut; i++) {
     for (float j = 0; j < params->sample_repeat; j += 1.0) {
       if (pp->offset + i > fc->samples) {
         pp->offset = 0;
       }
-      *out_buf++ = fc->file_buffer[pp->offset + i] * pp->gain;
+      *out_buf++ = fc->file_buffer[pp->offset + i];
+      /*
+      if(filter_flag == 0) {
+	pp->filter_l->calculate((double) out_sample);
+	*out_buf++ = (WRITE_TYPE) (pp->filter_l->lp);
+	filter_flag = 1;
+      } else {
+	pp->filter_r->calculate((double) out_sample);
+	*out_buf++ = (WRITE_TYPE) (pp->filter_r->lp);
+	filter_flag = 0;
+	} 
+      */    
     }
   }
 
@@ -334,8 +398,12 @@ int main(int ac, char *av[]) {
 
   // play params, for looping etc ...
   play_params pp;
-
+  state_variable_filter filter_l(3000, 7, file.samplerate());
+  state_variable_filter filter_r(3000, 7, file.samplerate());
+  
   pp.gain = 0.001;
+  pp.filter_l = &filter_l;
+  pp.filter_r = &filter_r;
   pp.state = PSTATE::PLAY;
   pp.cmd_queue = &cmd_queue;
   pp.loop_start = 0;
@@ -390,24 +458,24 @@ int main(int ac, char *av[]) {
       std::cout << "gain up" << std::endl;
       cont.cmd = COMMAND::GAIN_CHANGE;
       cont.new_gain = pp.gain + 0.001;      
-      cmd_queue.push(cont);
       break;
     case 'c':
       std::cout << "gain down" << std::endl;
       cont.cmd = COMMAND::GAIN_CHANGE;      
       cont.new_gain = pp.gain - 0.001;
-      cmd_queue.push(cont);
       break;
     case 's':
       cont.cmd = COMMAND::STATE_CHANGE;
-      cont.new_state = PSTATE::SILENCE;
-      cmd_queue.push(cont);
-      break;
-    case 'p':
-      cont.cmd = COMMAND::STATE_CHANGE;
-      cont.new_state = PSTATE::PLAY;
-      cmd_queue.push(cont);
-      break;
+      if(pp.state == PSTATE::PLAY){
+	cont.new_state = PSTATE::SILENCE;
+      } else if (pp.state == PSTATE::LOOP){
+	cont.new_state = PSTATE::LOOP_SILENCE;
+      } else if (pp.state == PSTATE::SILENCE){
+	cont.new_state = PSTATE::PLAY;
+      } else if (pp.state = PSTATE::LOOP_SILENCE) {
+	cont.new_state = PSTATE::LOOP;
+      }
+      break;    
     case ' ':
       if(pp.state == PSTATE::PLAY){
 	cont.cmd = COMMAND::LOOP_INIT;
@@ -416,11 +484,25 @@ int main(int ac, char *av[]) {
 	cont.cmd = COMMAND::LOOP_FINISH;
 	std::cout << "loop to: " << pp.offset << std::endl;
       }
-      cmd_queue.push(cont);
+      break;
+    case 'b':
+      cont.cmd = COMMAND::STATE_CHANGE;
+      if(pp.state == PSTATE::PLAY){
+	cont.new_state = PSTATE::BLOCK;
+      } else if (pp.state == PSTATE::LOOP){
+	cont.new_state = PSTATE::LOOP_BLOCK;
+      } else if (pp.state == PSTATE::LOOP_BLOCK) {
+	cont.new_state = PSTATE::LOOP;
+	cv.notify_all();
+      } else if (pp.state == PSTATE::BLOCK){
+	cont.new_state = PSTATE::PLAY;
+	cv.notify_all();
+      }
       break;
     default:
       std::cout << "COMMAND NOT ACCEPTED!" << std::endl;
     }
+    cmd_queue.push(cont);
   }
 
   // on exit, close stream  
