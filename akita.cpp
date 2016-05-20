@@ -178,7 +178,10 @@ struct file_container {
     delete[] chunk_buffer;
   }
 
-  ~file_container() { delete[] file_buffer; }
+  ~file_container() {
+    //std::cout << "cleaning file buffer" << std::endl;
+    delete[] file_buffer;
+  }
 
   void print_file_info() {
     // display some file info ...
@@ -247,6 +250,7 @@ struct source_params {
   }
 
   ~source_params(){
+    //std::cout << "cleaning source params" << std::endl;
     delete fc;
     delete cmd_queue;
   }
@@ -267,6 +271,7 @@ struct filter_params {
   }
 
   ~filter_params () {
+    //std::cout << "cleaning filter params" << std::endl;
     delete cmd_queue;
   }
 };
@@ -418,7 +423,7 @@ void stop_audio(RtAudio& source, RtAudio& filter) {
 }
 
 template<typename READ_TYPE>
-void handle_input(source_params<READ_TYPE> spar, filter_params fpar ){
+void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
   char input;
   // main loop
   
@@ -556,7 +561,7 @@ int handle_audio(options_container& opts) {
     return EXIT_FAILURE;
   }
 
-  std::cout << "\nPlaying ... press q to quit.\n";
+  std::cout << "Playing ... press q to quit" << std::endl;
   
   handle_input(spar, fpar);
   
@@ -625,9 +630,5 @@ int main(int ac, char *av[]) {
   std::cout << "  Offset mod:    " << opts.offset_cut << std::endl << std::endl;
 
   //from here on, things must be parametrized
-  int exit_code = handlers[init_key(opts.read_type, opts.write_type)](opts);
-
-  std::cout << exit_code << std::endl;
-  
-  return exit_code;
+  return handlers[init_key(opts.read_type, opts.write_type)](opts);;
 }
