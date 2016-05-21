@@ -435,7 +435,7 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   }
 
   // block source thread ... might have an interesting effect ...
-  if(spar->state == BLOCK){
+  if(spar->state == BLOCK || spar->state == LOOP_BLOCK){
     std::unique_lock<std::mutex> lck(mtx);
     cv.wait(lck);
     return 0;
@@ -642,16 +642,21 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       }
       spar.cmd_queue->push(scont);
       break;
-    case 'b':      
+    case 'b':
+      
       scont.cmd = COMMAND::STATE_CHANGE;
       if(spar.state == PLAY){
+	std::cout << "blocking source" << std::endl;
 	scont.new_state = BLOCK;
       } else if (spar.state == LOOP){
+	std::cout << "blocking source loop" << std::endl;
 	scont.new_state = LOOP_BLOCK;
       } else if (spar.state == LOOP_BLOCK) {
+	std::cout << "un-blocking source" << std::endl;
 	scont.new_state = LOOP;
 	cv.notify_all();
       } else if (spar.state == BLOCK){
+	std::cout << "un-blocking source-loop" << std::endl;
 	scont.new_state = PLAY;
 	cv.notify_all();
       }
