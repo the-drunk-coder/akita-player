@@ -101,8 +101,129 @@ std::istream &operator>>(std::istream &in, PMODE &pmode) {
 
 // commands to control audio threads 
 namespace COMMAND {
-  enum COMMAND { MODE_CHANGE, STATE_CHANGE, GAIN_CHANGE, LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
+  enum COMMAND { MODE_CHANGE, STATE_CHANGE, GAIN_CHANGE, FILTER_ON, FILTER_OFF, LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
 }
+
+/*
+ * Filter and filterbank
+ */
+struct canonical_sos_filter {
+  enum FMODE {HP, BP, LP, NOTCH, AP};
+
+  float a1, a2;
+  float b0, b1, b2;
+  float k;
+  float q;
+
+  float del1, del2; 
+  
+  canonical_sos_filter(){
+    update(5000, 2, 44100, LP);
+  }
+
+  canonical_sos_filter(double frequency, double q, int samplerate, FMODE mode){
+    update(frequency, q, samplerate, mode);
+  }
+
+  void update(double frequency, double q, int samplerate, FMODE mode) {    
+    del1 = 0;
+    del2 = 0;
+    k = tanh( (M_PI*frequency) / samplerate);
+    a1 = (2.0 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
+    a2 = ((pow(k,2) * q) - k + q) / ((pow(k,2) * q) + k + q);
+    if (mode == FMODE::LP){
+      b0 = (pow(k,2) * q) / ((pow(k,2) * q) + k + q);
+      b1 = (2.0 * pow(k,2) * q) / ((pow(k,2) * q) + k + q);
+      b2 = b0;      
+    } else if (mode == FMODE::HP){
+      b0 = q / ((pow(k,2) * q) + k + q);
+      b1 = -1.0 * ((2.0 * q) / ((pow(k,2) * q) + k + q));
+      b2 = b0;      
+    } else if (mode == FMODE::BP){
+      b0 = k / ((pow(k,2) * q) + k + q);
+      b1 = 0;
+      b2 = -1.0 * b0;      
+    } else if (mode == FMODE::NOTCH){
+      b0 = (q * (1.0 + pow(k,2))) / ((pow(k,2) * q) + k + q);
+      b1 = (2 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
+      b2 = b0;      
+    } else if (mode == FMODE::AP){
+      b0 = ((pow(k,2) * q) - k + q) / ((pow(k,2) * q) + k + q);
+      b1 = (2 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
+      b2 = 1.0;      
+    }
+  }
+
+  double calculate(float sample){
+    float intermediate = sample + ((-1.0 * a1) * del1) + ((-1.0 * a2) * del2);
+    float out = (b0 * intermediate) + (b1 * del1) + (b2 * del2);
+    del2 = del1;
+    del1 = intermediate;
+    return out;
+  }
+
+  void process(float& sample){
+    sample = calculate(sample);          
+  }
+};
+
+// a simple filterbank consisting of several state-variable filters
+struct filterbank {
+  filterbank(int channels, int samplerate, double lowcut, double hicut, int bands) {
+    this->bands = bands;
+    this->channels = channels;
+    
+    fbank = new canonical_sos_filter[channels * bands];
+
+    for(int ch = 0; ch < channels; ch++) {
+      fbank[ch * bands].update(lowcut, 1.5, samplerate, canonical_sos_filter::HP);
+      for(int b = 1; b < bands-1; b++) {
+	fbank[(ch * bands) + b].update(lowcut + (b * ((hicut - lowcut) / bands)) , 1.5, samplerate, canonical_sos_filter::NOTCH);
+      }
+      fbank[(ch * bands) + bands-1].update(hicut, 1.5, samplerate, canonical_sos_filter::LP);
+    }
+
+    fmask = new bool[bands];
+    for(int b = 0; b < bands; b++) {
+      fmask[b] = false;
+    }
+  }
+
+  ~filterbank() {
+    delete [] fbank;
+    delete [] fmask;
+  }
+
+  int bands;
+  int channels;
+  canonical_sos_filter* fbank;
+  bool* fmask;
+
+  float apply(int channel, float& sample) {    
+    for(int b = 0; b < bands; b++){
+      if(fmask[b]){	
+	fbank[(channel * bands) + b].process(sample);
+      }
+    }
+    return sample;
+  }
+
+  void toggle_band(int band) {
+    if(fmask[band]) {
+      fmask[band] = false;
+    } else {
+      fmask[band] = true;
+    } 
+   }
+
+  void print_bands(){
+    std::cout << "Filter bands: ";
+    for(int i = 0; i < bands; i++){
+      std::cout << "[" << fmask[i] << "] ";
+    }
+    std::cout << std::endl;
+  }
+};
 
 /*
  * container for command line options
@@ -207,8 +328,7 @@ struct filter_command_container {
   
   // parameters that could be subject to change
   PMODE new_mode;
-  float gain;
-  bool filter;
+  float gain;  
 };
 
 /*
@@ -259,20 +379,23 @@ struct source_params {
 // params for the filter 
 struct filter_params {
   lfree::spsc_queue<filter_command_container>* cmd_queue;
+  filterbank* fbank; 
   PMODE mode;
   float gain;
   bool filter = false;
-
+  
   filter_params (options_container& opts) {
     mode = opts.initial_mode;
     gain = opts.initial_gain;
 
     cmd_queue = new lfree::spsc_queue<filter_command_container>(10);
+    fbank = new filterbank(2, opts.samplerate, 100, 8000, 10);
   }
 
   ~filter_params () {
     //std::cout << "cleaning filter params" << std::endl;
     delete cmd_queue;
+    delete fbank;
   }
 };
 
@@ -360,8 +483,12 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
   // handle commands
   filter_command_container fcont;
   while(cmd_queue->pop(&fcont)){
-    if(fcont.cmd == COMMAND::GAIN_CHANGE){
+    if(fcont.cmd == COMMAND::GAIN_CHANGE) {
       fpar->gain = fcont.gain;
+    } else if(fcont.cmd == COMMAND::FILTER_ON) {
+      fpar->filter = true;
+    } else if(fcont.cmd == COMMAND::FILTER_OFF) {
+      fpar->filter = false;
     }
   }
   
@@ -378,8 +505,12 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       if (isnan(current_sample)) current_sample = 0;    
       if (current_sample < -1.0) current_sample = -1.0;
       if (current_sample > 1.0) current_sample = 1.0;
-        
-      out_buf[i] = current_sample * fpar->gain;
+      if (fpar->filter) {
+	current_sample *= fpar->gain;
+	out_buf[i] = fpar->fbank->apply(i%2, current_sample);	  	
+      } else {
+	out_buf[i] = current_sample * fpar->gain;	  	
+      }
     }
   } else {
     // in pure prox mode, all kinds of manipulations hardly make sense
@@ -452,6 +583,32 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
     filter_command_container fcont;
     source_command_container scont;
     switch(input) {    
+    case '1':
+    case '2':
+    case '3':
+    case '4':
+    case '5':
+    case '6':
+    case '7':
+    case '8':
+    case '9':
+    case '0':
+      // stupidly simple, but it seems to work ...
+      if (input == '0'){input = 9;}
+      else {input -= 49;}
+      fpar.fbank->toggle_band(input);
+      fpar.fbank->print_bands();
+      break;
+    case 'f':
+      if (fpar.filter) {	
+	fcont.cmd = COMMAND::FILTER_OFF;
+	std::cout << "filter off" << std::endl;
+      } else {
+	fcont.cmd = COMMAND::FILTER_ON;
+	std::cout << "filter on" << std::endl;
+      }
+      fpar.cmd_queue->push(fcont);      
+      break;
     case 'd':     
       std::cout << "gain up" << std::endl;
       fcont.cmd = COMMAND::GAIN_CHANGE;
