@@ -298,14 +298,14 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   WRITE_TYPE *out_buf = (WRITE_TYPE *) outputBuffer;
 
   // handle commands
-  source_command_container cont;
-  while(cmd_queue->pop(&cont)){
-    if(cont.cmd == COMMAND::STATE_CHANGE){
-      spar->state = cont.new_state;
-    } else if(cont.cmd == COMMAND::LOOP_INIT) {
+  source_command_container scont;
+  while(cmd_queue->pop(&scont)){
+    if(scont.cmd == COMMAND::STATE_CHANGE){
+      spar->state = scont.new_state;
+    } else if(scont.cmd == COMMAND::LOOP_INIT) {
       spar->loop_start = spar->offset;
       spar->state = LOOP_REC;
-    } else if(cont.cmd == COMMAND::LOOP_FINISH) {
+    } else if(scont.cmd == COMMAND::LOOP_FINISH) {
       spar->loop_end = spar->offset;
       spar->state = LOOP;
     }
@@ -354,18 +354,38 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
                  unsigned int nBufferFrames, double streamTime,
 	   RtAudioStreamStatus status, void *userData) {
 
+  filter_params *fpar = reinterpret_cast<filter_params*>(userData);
+  lfree::spsc_queue<filter_command_container>* cmd_queue = fpar->cmd_queue;
+
+  // handle commands
+  filter_command_container fcont;
+  while(cmd_queue->pop(&fcont)){
+    if(fcont.cmd == COMMAND::GAIN_CHANGE){
+      fpar->gain = fcont.gain;
+    }
+  }
+  
   float* in_buf = (float *) inputBuffer;
   float* out_buf = (float *) outputBuffer;
-  
-  for (unsigned int i = 0; i < nBufferFrames * 2; i++) {
 
-    float current_sample = in_buf[i];
+  if(fpar->mode == PMODE::MILD){
+    for (unsigned int i = 0; i < nBufferFrames * 2; i++) {
 
-    if (isnan(current_sample)) current_sample = 0;    
-    if (current_sample < -1.0) current_sample = -1.0;
-    if (current_sample > 1.0) current_sample = 1.0;
+      float current_sample = in_buf[i];
+
+      // weed out impossible values ... while this kinda takes some of the edge off,
+      // it enables us to use some stuff like filters and gain ...
+      if (isnan(current_sample)) current_sample = 0;    
+      if (current_sample < -1.0) current_sample = -1.0;
+      if (current_sample > 1.0) current_sample = 1.0;
         
-    out_buf[i] = current_sample;
+      out_buf[i] = current_sample * fpar->gain;
+    }
+  } else {
+    // in pure prox mode, all kinds of manipulations hardly make sense
+    for (unsigned int i = 0; i < nBufferFrames * 2; i++) {
+      out_buf[i] = in_buf[i];
+    }
   }
 
   return 0;
@@ -413,13 +433,14 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
 /*
  * Function to stop audio
  */ 
-void stop_audio(RtAudio& source, RtAudio& filter) {
-  
+void stop_audio(RtAudio& source, RtAudio& filter, bool raw) {
   source.stopStream();
   source.closeStream();
 
-  filter.stopStream();
-  filter.closeStream();
+  if (!raw){
+    filter.stopStream();
+    filter.closeStream();
+  }
 }
 
 template<typename READ_TYPE>
@@ -428,55 +449,61 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
   // main loop
   
   while((input = getch()) != 'q'){   
-    source_command_container cont;
-    switch(input) {
-    case 'd':
+    filter_command_container fcont;
+    source_command_container scont;
+    switch(input) {    
+    case 'd':     
       std::cout << "gain up" << std::endl;
-      //cont.cmd = COMMAND::GAIN_CHANGE;      
+      fcont.cmd = COMMAND::GAIN_CHANGE;
+      fpar.cmd_queue->push(fcont);
       break;
-    case 'c':
+    case 'c':      
       std::cout << "gain down" << std::endl;
-      //   cont.cmd = COMMAND::GAIN_CHANGE;      
+      fcont.cmd = COMMAND::GAIN_CHANGE;
+      fpar.cmd_queue->push(fcont);
       break;
-    case 's':
-      cont.cmd = COMMAND::STATE_CHANGE;
+    case 's':      
+      scont.cmd = COMMAND::STATE_CHANGE;
       if(spar.state == PLAY){
-	cont.new_state = SILENCE;
+	scont.new_state = SILENCE;
       } else if (spar.state == LOOP){
-	cont.new_state = LOOP_SILENCE;
+	scont.new_state = LOOP_SILENCE;
       } else if (spar.state == SILENCE){
-	cont.new_state = PLAY;
+	scont.new_state = PLAY;
       } else if (spar.state == LOOP_SILENCE) {
-	cont.new_state = LOOP;
+	scont.new_state = LOOP;
       }
+      spar.cmd_queue->push(scont);
       break;    
-    case ' ':
+    case ' ':      
       if(spar.state == PLAY){
-	cont.cmd = COMMAND::LOOP_INIT;
+	scont.cmd = COMMAND::LOOP_INIT;
 	std::cout << "loop from: " << spar.offset << std::endl;
       } else if (spar.state == LOOP_REC) {
-	cont.cmd = COMMAND::LOOP_FINISH;
+	scont.cmd = COMMAND::LOOP_FINISH;
 	std::cout << "loop to: " << spar.offset << std::endl;
       }
+      spar.cmd_queue->push(scont);
       break;
-    case 'b':
-      cont.cmd = COMMAND::STATE_CHANGE;
+    case 'b':      
+      scont.cmd = COMMAND::STATE_CHANGE;
       if(spar.state == PLAY){
-	cont.new_state = BLOCK;
+	scont.new_state = BLOCK;
       } else if (spar.state == LOOP){
-	cont.new_state = LOOP_BLOCK;
+	scont.new_state = LOOP_BLOCK;
       } else if (spar.state == LOOP_BLOCK) {
-	cont.new_state = LOOP;
+	scont.new_state = LOOP;
 	cv.notify_all();
       } else if (spar.state == BLOCK){
-	cont.new_state = PLAY;
+	scont.new_state = PLAY;
 	cv.notify_all();
       }
+      spar.cmd_queue->push(scont);
       break;
     default:
       std::cout << "COMMAND NOT ACCEPTED!" << std::endl;
     }
-    spar.cmd_queue->push(cont);
+    
   }
 }
 
@@ -506,42 +533,48 @@ int handle_audio(options_container& opts) {
   // get current pid
   std::ostringstream str_pid;
   str_pid << ::getpid();
-  
-  RtAudio::StreamParameters rt_filter_out_parameters;
-  rt_filter_out_parameters.deviceId = filter.getDefaultOutputDevice();
-  rt_filter_out_parameters.nChannels = 2;
-  rt_filter_out_parameters.firstChannel = 0;
-
-  RtAudio::StreamParameters rt_filter_in_parameters;
-  rt_filter_in_parameters.deviceId = filter.getDefaultOutputDevice();
-  rt_filter_in_parameters.nChannels = 2;
-  rt_filter_in_parameters.firstChannel = 0;
-
-  RtAudio::StreamOptions rt_filter_opts;
-  rt_filter_opts.streamName = "akita-filter-";
-  rt_filter_opts.streamName.append(str_pid.str());
-  rt_filter_opts.autoConnectInput = false;
-
-  // initialize filter client
-  try {
-     filter.openStream(&rt_filter_out_parameters, &rt_filter_in_parameters, RTAUDIO_FLOAT32, opts.samplerate,
-		      &opts.buffer_frames, &filter_callback,
-		       (void *)&fpar, &rt_filter_opts);
-     filter.startStream();
-  } catch (RtAudioError &e) {
-    e.printMessage();
-    return EXIT_FAILURE;
-  }
 
   RtAudio::StreamParameters rt_source_parameters;
-
-  //find filter thread
-  for(unsigned int i = 0; i < source.getDeviceCount(); i++){
-    if (source.getDeviceInfo(i).name == rt_filter_opts.streamName){
-      rt_source_parameters.deviceId = i;
-    }
-  }
   
+  // in raw mode, all the beatiful modes will go directly to the DAC ... good luck !
+  if(opts.initial_mode != PMODE::RAW){
+    RtAudio::StreamParameters rt_filter_out_parameters;
+    rt_filter_out_parameters.deviceId = filter.getDefaultOutputDevice();
+    rt_filter_out_parameters.nChannels = 2;
+    rt_filter_out_parameters.firstChannel = 0;
+
+    RtAudio::StreamParameters rt_filter_in_parameters;
+    rt_filter_in_parameters.deviceId = filter.getDefaultOutputDevice();
+    rt_filter_in_parameters.nChannels = 2;
+    rt_filter_in_parameters.firstChannel = 0;
+
+    RtAudio::StreamOptions rt_filter_opts;
+    rt_filter_opts.streamName = "akita-filter-";
+    rt_filter_opts.streamName.append(str_pid.str());
+    rt_filter_opts.autoConnectInput = false;
+
+    // initialize filter client
+    try {
+      filter.openStream(&rt_filter_out_parameters, &rt_filter_in_parameters, RTAUDIO_FLOAT32, opts.samplerate,
+			&opts.buffer_frames, &filter_callback,
+			(void *)&fpar, &rt_filter_opts);
+      filter.startStream();
+    } catch (RtAudioError &e) {
+      e.printMessage();
+      return EXIT_FAILURE;
+    }
+
+    //find filter thread
+    for(unsigned int i = 0; i < source.getDeviceCount(); i++){
+      if (source.getDeviceInfo(i).name == rt_filter_opts.streamName){
+	rt_source_parameters.deviceId = i;
+      }
+    }
+
+  } else {
+    rt_source_parameters.deviceId = source.getDefaultOutputDevice();;
+  }
+
   rt_source_parameters.nChannels = 2;
   rt_source_parameters.firstChannel = 0;
 
@@ -566,7 +599,7 @@ int handle_audio(options_container& opts) {
   handle_input(spar, fpar);
   
   try {
-    stop_audio(source, filter);
+    stop_audio(source, filter, (opts.initial_mode == PMODE::RAW));
   } catch(RtAudioError &e){
     e.printMessage();
     return EXIT_FAILURE;
