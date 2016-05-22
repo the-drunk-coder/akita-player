@@ -253,6 +253,8 @@ struct options_container {
 
   float initial_gain;
 
+  int channel_offset;
+  
   // kill samples to make it all fuzzy !
   float fuzziness;
 };
@@ -586,6 +588,8 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("read-type", po::value<RWTYPES>(&opts.read_type)->default_value(SHORT), "Type used to read from audio file!")
     ("write-type", po::value<RWTYPES>(&opts.write_type)->default_value(SHORT), "Type used to write to audio buffer!")
     ("stream-type", po::value<RWTYPES>(&opts.stream_type)->default_value(SHORT), "Type used for the audio stream!")
+    ("channel-offset", po::value<int>(&opts.channel_offset)->default_value(0), "Offset to control channels (esp. useful for mono playback)!")
+    
     ;
   // ----- end options ... what kind of syntax is this ??
 
@@ -762,12 +766,12 @@ int handle_audio(options_container& opts) {
     RtAudio::StreamParameters rt_filter_out_parameters;
     rt_filter_out_parameters.deviceId = filter.getDefaultOutputDevice();
     rt_filter_out_parameters.nChannels = spar.fc->channels;
-    rt_filter_out_parameters.firstChannel = 0;
+    rt_filter_out_parameters.firstChannel = opts.channel_offset;
 
     RtAudio::StreamParameters rt_filter_in_parameters;
     rt_filter_in_parameters.deviceId = filter.getDefaultOutputDevice();
     rt_filter_in_parameters.nChannels = spar.fc->channels;
-    rt_filter_in_parameters.firstChannel = 0;
+    rt_filter_in_parameters.firstChannel = opts.channel_offset;
 
     RtAudio::StreamOptions rt_filter_opts;
     rt_filter_opts.streamName = "akita-filter-";
