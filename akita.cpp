@@ -368,12 +368,14 @@ struct source_params {
   
   source_params(options_container& opts) {
     state = opts.initial_state;
-    buffer_cut = opts.buffer_cut;
-    offset_cut = opts.offset_cut;
     sample_repeat = opts.sample_repeat;
     fuzziness = opts.fuzziness;
     
     fc = new file_container<READ_TYPE>(opts.filename);
+    buffer_cut = fc->channels;
+    offset_cut = fc->channels;
+    opts.buffer_cut = buffer_cut;
+    opts.offset_cut = offset_cut;
     cmd_queue = new lfree::spsc_queue<source_command_container>(10);
   }
 
@@ -468,12 +470,12 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   for (uint32_t i = 0; i < nBufferFrames * spar->fc->channels; i++) {   
     // loop in case we hit the file's end
     if (spar->offset + i > fc->samples) {
-        spar->offset = 0;
-     }
+      spar->offset = 0;
+    }
     // copy samples        
     out_buf[i] = fc->file_buffer[spar->offset + i];    
   }
-
+  
   // raw sample repetition vs channel-wise sample repetition ?
   // sample repetition
   for (uint32_t i = 0; i < (nBufferFrames * spar->fc->channels) / spar->sample_repeat; i++) {
@@ -740,6 +742,14 @@ int handle_audio(options_container& opts) {
   source_params<READ_TYPE> spar(opts);
   spar.fc->print_file_info();
   filter_params fpar(opts, spar.fc->channels);
+
+  std::cout << "Current Parameters:" << std::endl;
+  std::cout << "  Read type:     " << rwtypes_strings[opts.read_type] << std::endl;
+  std::cout << "  Write type:    " << rwtypes_strings[opts.write_type] << std::endl;
+  std::cout << "  Stream type:   " << rwtypes_strings[opts.stream_type] << std::endl;
+  std::cout << "  Sample repeat: " << opts.sample_repeat << std::endl;
+  std::cout << "  Buffer mod:    " << opts.buffer_cut << std::endl;
+  std::cout << "  Offset mod:    " << opts.offset_cut << std::endl << std::endl;
   
   // get current pid
   std::ostringstream str_pid;
@@ -751,12 +761,12 @@ int handle_audio(options_container& opts) {
   if(opts.initial_mode != PMODE::RAW){
     RtAudio::StreamParameters rt_filter_out_parameters;
     rt_filter_out_parameters.deviceId = filter.getDefaultOutputDevice();
-    rt_filter_out_parameters.nChannels = 2;
+    rt_filter_out_parameters.nChannels = spar.fc->channels;
     rt_filter_out_parameters.firstChannel = 0;
 
     RtAudio::StreamParameters rt_filter_in_parameters;
     rt_filter_in_parameters.deviceId = filter.getDefaultOutputDevice();
-    rt_filter_in_parameters.nChannels = 2;
+    rt_filter_in_parameters.nChannels = spar.fc->channels;
     rt_filter_in_parameters.firstChannel = 0;
 
     RtAudio::StreamOptions rt_filter_opts;
@@ -786,7 +796,7 @@ int handle_audio(options_container& opts) {
     rt_source_parameters.deviceId = source.getDefaultOutputDevice();;
   }
 
-  rt_source_parameters.nChannels = 2;
+  rt_source_parameters.nChannels = spar.fc->channels;
   rt_source_parameters.firstChannel = 0;
 
   RtAudio::StreamOptions source_opts;
@@ -864,15 +874,7 @@ int main(int ac, char *av[]) {
     std::cout << "  double     64 Bit, double" << std::endl;
     return EXIT_SUCCESS;
   }
-    
-  std::cout << "Current Parameters:" << std::endl;
-  std::cout << "  Read type:     " << rwtypes_strings[opts.read_type] << std::endl;
-  std::cout << "  Write type:    " << rwtypes_strings[opts.write_type] << std::endl;
-  std::cout << "  Stream type:   " << rwtypes_strings[opts.stream_type] << std::endl;
-  std::cout << "  Sample repeat: " << opts.sample_repeat << std::endl;
-  std::cout << "  Buffer mod:    " << opts.buffer_cut << std::endl;
-  std::cout << "  Offset mod:    " << opts.offset_cut << std::endl << std::endl;
-
+   
   //from here on, things must be parametrized
   return handlers[init_key(opts.read_type, opts.write_type)](opts);;
 }
