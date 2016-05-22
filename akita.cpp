@@ -12,6 +12,7 @@
 #include <condition_variable>
 #include <string>
 #include <functional>
+#include <climits>
 
 namespace po = boost::program_options;
 namespace lfree = boost::lockfree;
@@ -101,7 +102,7 @@ std::istream &operator>>(std::istream &in, PMODE &pmode) {
 
 // commands to control audio threads 
 namespace COMMAND {
-  enum COMMAND { MODE_CHANGE, STATE_CHANGE, GAIN_CHANGE, FILTER_ON, FILTER_OFF, LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
+  enum COMMAND { MODE_CHANGE, STATE_CHANGE, FUZZINESS_CHANGE, GAIN_CHANGE, FILTER_ON, FILTER_OFF, LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
 }
 
 /*
@@ -251,6 +252,9 @@ struct options_container {
   float sample_repeat;
 
   float initial_gain;
+
+  // kill samples to make it all fuzzy !
+  float fuzziness;
 };
 
 // file container to load and store samples in buffer
@@ -321,6 +325,7 @@ struct source_command_container {
   
   // parameters that could be subject to change
   PSTATE new_state;
+  float new_fuzziness;
 };
 
 struct filter_command_container {
@@ -359,11 +364,14 @@ struct source_params {
   float offset_cut;
   float sample_repeat;
 
+  float fuzziness;
+  
   source_params(options_container& opts) {
     state = opts.initial_state;
     buffer_cut = opts.buffer_cut;
     offset_cut = opts.offset_cut;
     sample_repeat = opts.sample_repeat;
+    fuzziness = opts.fuzziness;
     
     fc = new file_container<READ_TYPE>(opts.filename);
     cmd_queue = new lfree::spsc_queue<source_command_container>(10);
@@ -425,12 +433,14 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   while(cmd_queue->pop(&scont)){
     if(scont.cmd == COMMAND::STATE_CHANGE){
       spar->state = scont.new_state;
-    } else if(scont.cmd == COMMAND::LOOP_INIT) {
+    } else if (scont.cmd == COMMAND::LOOP_INIT) {
       spar->loop_start = spar->offset;
       spar->state = LOOP_REC;
-    } else if(scont.cmd == COMMAND::LOOP_FINISH) {
+    } else if (scont.cmd == COMMAND::LOOP_FINISH) {
       spar->loop_end = spar->offset;
       spar->state = LOOP;
+    } else if (scont.cmd == COMMAND::FUZZINESS_CHANGE){
+      spar->fuzziness = scont.new_fuzziness;
     }
   }
 
@@ -451,23 +461,45 @@ int source_callback(void *outputBuffer, void *inputBuffer,
     // in this case, offset won't be modified
     return 0;
   }
- 
+
   // transfer samples from file buffer to output !
-  for (int i = 0; i < nBufferFrames * spar->buffer_cut; i++) {
-    for (float j = 0; j < spar->sample_repeat; j += 1.0) {
-      if (spar->offset + i > fc->samples) {
+  for (uint32_t i = 0; i < nBufferFrames * spar->fc->channels; i++) {   
+    // loop in case we hit the file's end
+    if (spar->offset + i > fc->samples) {
         spar->offset = 0;
-      }
-      *out_buf++ = fc->file_buffer[spar->offset + i];          
-    }
+     }
+    // copy samples        
+    out_buf[i] = fc->file_buffer[spar->offset + i];    
   }
 
-  // increament read offest
-  spar->offset += nBufferFrames * spar->offset_cut;
+  // raw sample repetition vs channel-wise sample repetition ?
+  // sample repetition
+  for (uint32_t i = 0; i < (nBufferFrames * spar->fc->channels) / spar->sample_repeat; i++) {
+    for(int j = 0; j < spar->sample_repeat; j++){
+      out_buf[i+j] = out_buf[i];
+    }
+  }
+  
+  // buffercutting
+  for (uint32_t i = nBufferFrames * spar->buffer_cut; i < nBufferFrames * spar->fc->channels; i++) {           
+    out_buf[i] = 0.0;    
+  }
+  
+  // random sample shootout
+  if(spar->fuzziness > 0.0){
+    for (uint32_t i = 0; i < nBufferFrames * spar->fc->channels; i++) {   
+      if(rand() / (float) INT_MAX < spar->fuzziness){
+	out_buf[i] = 0.0;    
+      }
+    }
+  }
+  
+  // increament read offset
+  spar->offset += (nBufferFrames * spar->offset_cut) / spar->sample_repeat;
   if((spar->state == LOOP) && (spar->offset >= spar->loop_end)){
     spar->offset = spar->loop_start;
   }
- 
+   
   return 0;
 }
 
@@ -540,12 +572,13 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
   desc.add_options()
     ("help", "Display this help!")
     ("input-file", po::value<std::string>(&opts.filename)->default_value(""), "The input file - WAV of FLAC!)")
-    ("init-state", po::value<PSTATE>(&opts.initial_state)->default_value(PLAY), "Initial state!")
-    ("init-mode", po::value<PMODE>(&opts.initial_mode)->default_value(MILD), "Initial state!")
+    ("init-state", po::value<PSTATE>(&opts.initial_state)->default_value(PLAY), "Initial state!")    
+    ("init-mode", po::value<PMODE>(&opts.initial_mode)->default_value(MILD), "Initial mode!")
     ("init-gain", po::value<float>(&opts.initial_gain)->default_value(0.5), "Initial gain (default: 0.5)!")
     ("sample-repeat", po::value<float>(&opts.sample_repeat)->default_value(1), "Repeat every sample n times!")
-    ("buffer-mod", po::value<float>(&opts.buffer_cut)->default_value(2), "Don't fill source output buffer completely!")
+    ("buffer-cut", po::value<float>(&opts.buffer_cut)->default_value(2), "Don't fill source output buffer completely!")
     ("offset-mod", po::value<float>(&opts.offset_cut)->default_value(2), "Modify offset increment (chunk size read from buffer)!")
+    ("fuzziness", po::value<float>(&opts.fuzziness)->default_value(0.0), "Create fuzziness by removing random samples with a certain probability!")
     ("read-type", po::value<RWTYPES>(&opts.read_type)->default_value(SHORT), "Type used to read from audio file!")
     ("write-type", po::value<RWTYPES>(&opts.write_type)->default_value(SHORT), "Type used to write to audio buffer!")
     ("stream-type", po::value<RWTYPES>(&opts.stream_type)->default_value(SHORT), "Type used for the audio stream!")
@@ -609,15 +642,29 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       }
       fpar.cmd_queue->push(fcont);      
       break;
-    case 'd':     
-      std::cout << "gain up" << std::endl;
+    case 'd':           
       fcont.cmd = COMMAND::GAIN_CHANGE;
+      fcont.gain = fpar.gain + 0.05 >= 1.0 ? 1.0 :  fpar.gain + 0.05;
+      std::cout << "gain up, new gain: " << fcont.gain << std::endl;
       fpar.cmd_queue->push(fcont);
       break;
     case 'c':      
-      std::cout << "gain down" << std::endl;
       fcont.cmd = COMMAND::GAIN_CHANGE;
+      fcont.gain = fpar.gain - 0.05 <= 0.0 ? 0.0 : fpar.gain - 0.05;
+      std::cout << "gain down, new gain: " << fcont.gain << std::endl;
       fpar.cmd_queue->push(fcont);
+      break;
+    case 'a':           
+      scont.cmd = COMMAND::FUZZINESS_CHANGE;
+      scont.new_fuzziness = spar.fuzziness + 0.05 >= 1.0 ? 1.0 : spar.fuzziness + 0.05;
+      std::cout << "fuzziness up, new fuzziness: " << scont.new_fuzziness << std::endl;
+      spar.cmd_queue->push(scont);
+      break;
+    case 'y':      
+      scont.cmd = COMMAND::FUZZINESS_CHANGE;
+      scont.new_fuzziness = spar.fuzziness - 0.05 <= 0.0 ? 0.0 : spar.fuzziness - 0.05;
+      std::cout << "fuzziness down, new fuzziness: " << scont.new_fuzziness << std::endl;
+      spar.cmd_queue->push(scont);
       break;
     case 's':      
       scont.cmd = COMMAND::STATE_CHANGE;
@@ -642,8 +689,7 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       }
       spar.cmd_queue->push(scont);
       break;
-    case 'b':
-      
+    case 'b':      
       scont.cmd = COMMAND::STATE_CHANGE;
       if(spar.state == PLAY){
 	std::cout << "blocking source" << std::endl;
