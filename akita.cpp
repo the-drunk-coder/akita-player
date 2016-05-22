@@ -102,7 +102,7 @@ std::istream &operator>>(std::istream &in, PMODE &pmode) {
 
 // commands to control audio threads 
 namespace COMMAND {
-  enum COMMAND { MODE_CHANGE, STATE_CHANGE, FUZZINESS_CHANGE, GAIN_CHANGE, FILTER_ON, FILTER_OFF, LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
+  enum COMMAND { MODE_CHANGE, STATE_CHANGE, SAMPLERATE_CHANGE, FUZZINESS_CHANGE, GAIN_CHANGE, FILTER_ON, FILTER_OFF, LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
 }
 
 /*
@@ -328,6 +328,7 @@ struct source_command_container {
   // parameters that could be subject to change
   PSTATE new_state;
   float new_fuzziness;
+  int new_sample_repeat;
 };
 
 struct filter_command_container {
@@ -447,6 +448,8 @@ int source_callback(void *outputBuffer, void *inputBuffer,
       spar->state = LOOP;
     } else if (scont.cmd == COMMAND::FUZZINESS_CHANGE){
       spar->fuzziness = scont.new_fuzziness;
+    } else if (scont.cmd == COMMAND::SAMPLERATE_CHANGE){
+      spar->sample_repeat = scont.new_sample_repeat;
     }
   }
 
@@ -624,6 +627,7 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
     filter_command_container fcont;
     source_command_container scont;
     switch(input) {    
+      // filter control
     case '1':
     case '2':
     case '3':
@@ -650,6 +654,7 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       }
       fpar.cmd_queue->push(fcont);      
       break;
+      // gain control
     case 'd':           
       fcont.cmd = COMMAND::GAIN_CHANGE;
       fcont.gain = fpar.gain + 0.05 >= 1.0 ? 1.0 :  fpar.gain + 0.05;
@@ -662,6 +667,7 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       std::cout << "gain down, new gain: " << fcont.gain << std::endl;
       fpar.cmd_queue->push(fcont);
       break;
+      // fuzziness control
     case 'a':           
       scont.cmd = COMMAND::FUZZINESS_CHANGE;
       scont.new_fuzziness = spar.fuzziness + 0.05 >= 1.0 ? 1.0 : spar.fuzziness + 0.05;
@@ -674,6 +680,20 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       std::cout << "fuzziness down, new fuzziness: " << scont.new_fuzziness << std::endl;
       spar.cmd_queue->push(scont);
       break;
+      // samplerate control
+    case 's':           
+      scont.cmd = COMMAND::SAMPLERATE_CHANGE;
+      scont.new_sample_repeat = spar.sample_repeat + 1;
+      std::cout << "sample repetition up, now: " << scont.new_sample_repeat << std::endl;
+      spar.cmd_queue->push(scont);
+      break;
+    case 'x':      
+      scont.cmd = COMMAND::SAMPLERATE_CHANGE;
+      scont.new_sample_repeat = spar.sample_repeat - 1 <= 1 ? 1 : spar.sample_repeat - 1;
+      std::cout << "sample repetition down, now: " << scont.new_sample_repeat << std::endl;
+      spar.cmd_queue->push(scont);
+      break;
+      // thread blocking control
     case 'm':      
       scont.cmd = COMMAND::STATE_CHANGE;
       if(spar.state == PLAY){
