@@ -389,15 +389,17 @@ struct filter_params {
   lfree::spsc_queue<filter_command_container>* cmd_queue;
   filterbank* fbank; 
   PMODE mode;
+  int channels;
   float gain;
   bool filter = false;
   
-  filter_params (options_container& opts) {
+  filter_params (options_container& opts, int channels) {
     mode = opts.initial_mode;
     gain = opts.initial_gain;
-
+    this->channels = channels;
+    
     cmd_queue = new lfree::spsc_queue<filter_command_container>(10);
-    fbank = new filterbank(2, opts.samplerate, 100, 8000, 10);
+    fbank = new filterbank(channels, opts.samplerate, 100, 8000, 10);
   }
 
   ~filter_params () {
@@ -495,7 +497,7 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   }
   
   // increament read offset
-  spar->offset += (nBufferFrames * spar->offset_cut) / spar->sample_repeat;
+  spar->offset += ((float) nBufferFrames * spar->offset_cut) / spar->sample_repeat;
   if((spar->state == LOOP) && (spar->offset >= spar->loop_end)){
     spar->offset = spar->loop_start;
   }
@@ -528,7 +530,7 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
   float* out_buf = (float *) outputBuffer;
 
   if(fpar->mode == PMODE::MILD){
-    for (unsigned int i = 0; i < nBufferFrames * 2; i++) {
+    for (unsigned int i = 0; i < nBufferFrames * fpar->channels; i++) {
 
       float current_sample = in_buf[i];
 
@@ -539,14 +541,14 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       if (current_sample > 1.0) current_sample = 1.0;
       if (fpar->filter) {
 	current_sample *= fpar->gain;
-	out_buf[i] = fpar->fbank->apply(i%2, current_sample);	  	
+	out_buf[i] = fpar->fbank->apply(i % fpar->channels, current_sample);	  	
       } else {
 	out_buf[i] = current_sample * fpar->gain;	  	
       }
     }
   } else {
     // in pure prox mode, all kinds of manipulations hardly make sense
-    for (unsigned int i = 0; i < nBufferFrames * 2; i++) {
+    for (unsigned int i = 0; i < nBufferFrames * fpar->channels; i++) {
       out_buf[i] = in_buf[i];
     }
   }
@@ -666,7 +668,7 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       std::cout << "fuzziness down, new fuzziness: " << scont.new_fuzziness << std::endl;
       spar.cmd_queue->push(scont);
       break;
-    case 's':      
+    case 'm':      
       scont.cmd = COMMAND::STATE_CHANGE;
       if(spar.state == PLAY){
 	scont.new_state = SILENCE;
@@ -677,15 +679,16 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       } else if (spar.state == LOOP_SILENCE) {
 	scont.new_state = LOOP;
       }
+      std::cout << "suspend & mute" << std::endl;
       spar.cmd_queue->push(scont);
       break;    
     case ' ':      
       if(spar.state == PLAY){
 	scont.cmd = COMMAND::LOOP_INIT;
-	std::cout << "loop from: " << spar.offset << std::endl;
+	std::cout << "loop from: " << spar.offset << " (~" << (float) spar.offset / spar.fc->samples  << ")" << std::endl;
       } else if (spar.state == LOOP_REC) {
 	scont.cmd = COMMAND::LOOP_FINISH;
-	std::cout << "loop to: " << spar.offset << std::endl;
+	std::cout << "loop to: " << spar.offset << " (~" << (float) spar.offset / spar.fc->samples  << ")" << std::endl;
       }
       spar.cmd_queue->push(scont);
       break;
@@ -698,11 +701,11 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
 	std::cout << "blocking source loop" << std::endl;
 	scont.new_state = LOOP_BLOCK;
       } else if (spar.state == LOOP_BLOCK) {
-	std::cout << "un-blocking source" << std::endl;
+	std::cout << "un-blocking source-loop" << std::endl;
 	scont.new_state = LOOP;
 	cv.notify_all();
       } else if (spar.state == BLOCK){
-	std::cout << "un-blocking source-loop" << std::endl;
+	std::cout << "un-blocking source" << std::endl;
 	scont.new_state = PLAY;
 	cv.notify_all();
       }
@@ -736,7 +739,7 @@ int handle_audio(options_container& opts) {
   
   source_params<READ_TYPE> spar(opts);
   spar.fc->print_file_info();
-  filter_params fpar(opts);
+  filter_params fpar(opts, spar.fc->channels);
   
   // get current pid
   std::ostringstream str_pid;
@@ -744,7 +747,7 @@ int handle_audio(options_container& opts) {
 
   RtAudio::StreamParameters rt_source_parameters;
   
-  // in raw mode, all the beatiful modes will go directly to the DAC ... good luck !
+  // in raw mode, all the beatiful glitches will go directly to the DAC ... good luck !
   if(opts.initial_mode != PMODE::RAW){
     RtAudio::StreamParameters rt_filter_out_parameters;
     rt_filter_out_parameters.deviceId = filter.getDefaultOutputDevice();
