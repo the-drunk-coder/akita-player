@@ -259,13 +259,6 @@ struct options_container {
   float fuzziness;
 };
 
-struct file_container_exception{
-  std::string msg;
-  file_container_exception(std::string message){
-    msg = message;
-  }
-};
-
 // file container to load and store samples in buffer
 template <typename READ_TYPE>
 struct file_container {
@@ -285,11 +278,7 @@ struct file_container {
 
   // methods
   file_container(std::string fname) {
-    name = fname;      
-  }
-
-  // load file to memory
-  void load(){
+    name = fname;
     // libsndfile soundfilehandle ... 
     SndfileHandle file = SndfileHandle(name.c_str());
 
@@ -301,7 +290,8 @@ struct file_container {
 
     // can't work on an empty file !
     if(frames <= 0){
-      throw file_container_exception("Soundfile \"" + name + "\" invalid !");
+      state = FAILED;
+      return;
     }
     
     samples = frames * channels;
@@ -780,11 +770,8 @@ int handle_audio(options_container& opts) {
   
   source_params<READ_TYPE> spar(opts);
 
-  //load audio file 
-  try{
-    spar.fc->load();
-  } catch (file_container_exception& e) {
-    std::cout << e.msg << std::endl;
+  if (spar.fc->state != file_container<READ_TYPE>::READY) {
+    std::cout << "File \"" << opts.filename << "\" is not valid!" << std::endl;
     return EXIT_FAILURE;
   }
   
