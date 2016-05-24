@@ -259,9 +259,19 @@ struct options_container {
   float fuzziness;
 };
 
+struct file_container_exception{
+  std::string msg;
+  file_container_exception(std::string message){
+    msg = message;
+  }
+};
+
 // file container to load and store samples in buffer
 template <typename READ_TYPE>
 struct file_container {
+  enum STATE{ INIT, READY, FAILED };
+
+  STATE state = INIT;
 
   const int CHUNKSIZE = 1024;
   
@@ -275,18 +285,27 @@ struct file_container {
 
   // methods
   file_container(std::string fname) {
+    name = fname;      
+  }
 
-    name = fname;
-    
+  // load file to memory
+  void load(){
     // libsndfile soundfilehandle ... 
-    SndfileHandle file = SndfileHandle(fname.c_str());
+    SndfileHandle file = SndfileHandle(name.c_str());
 
+    channels = file.channels();
     // transfer some info
     samplerate = file.samplerate();
-    channels = file.channels();
+
     frames = file.frames();
-    samples = frames * channels;
+
+    // can't work on an empty file !
+    if(frames <= 0){
+      throw file_container_exception("Soundfile \"" + name + "\" invalid !");
+    }
     
+    samples = frames * channels;
+  
     file_buffer = new READ_TYPE[samples];
 
     int frame_chunksize = CHUNKSIZE * channels;
@@ -303,11 +322,15 @@ struct file_container {
     }
     // not needed any longer !
     delete[] chunk_buffer;
+    
+    state = READY;
   }
-
+  
   ~file_container() {
-    //std::cout << "cleaning file buffer" << std::endl;
-    delete[] file_buffer;
+
+    if(state == READY){
+      delete[] file_buffer;
+    }
   }
 
   void print_file_info() {
@@ -755,15 +778,16 @@ int handle_audio(options_container& opts) {
     return EXIT_FAILURE;
   }
   
-  RtAudio source;
-  RtAudio filter;
+  source_params<READ_TYPE> spar(opts);
 
-  if (filter.getDeviceCount() < 1) {
-    std::cout << "\nNo audio devices found!\n";
+  //load audio file 
+  try{
+    spar.fc->load();
+  } catch (file_container_exception& e) {
+    std::cout << e.msg << std::endl;
     return EXIT_FAILURE;
   }
   
-  source_params<READ_TYPE> spar(opts);
   spar.fc->print_file_info();
   filter_params fpar(opts, spar.fc->channels);
 
@@ -779,6 +803,15 @@ int handle_audio(options_container& opts) {
   std::ostringstream str_pid;
   str_pid << ::getpid();
 
+  // initialize audio streams
+  RtAudio source;
+  RtAudio filter;
+
+  if (filter.getDeviceCount() < 1) {
+    std::cout << "\nNo audio devices found!\n";
+    return EXIT_FAILURE;
+  }
+  
   RtAudio::StreamParameters rt_source_parameters;
   
   // in raw mode, all the beatiful glitches will go directly to the DAC ... good luck !
