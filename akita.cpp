@@ -13,6 +13,7 @@
 #include <string>
 #include <functional>
 #include <climits>
+#include <bitset>
 
 namespace po = boost::program_options;
 namespace lfree = boost::lockfree;
@@ -103,6 +104,38 @@ std::istream &operator>>(std::istream &in, PMODE &pmode) {
 // commands to control audio threads 
 namespace COMMAND {
   enum COMMAND { MODE_CHANGE, STATE_CHANGE, SAMPLERATE_CHANGE, FUZZINESS_CHANGE, GAIN_CHANGE, FILTER_ON, FILTER_OFF, LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
+}
+
+/*
+ * random bit flipping
+ */
+union float_conv {
+  uint32_t uint_val;
+  float float_val;
+};
+
+float random_flip(float sample, float prob){
+
+  float_conv sample_conv;
+  sample_conv.float_val = sample;
+
+  //use a bitset
+  std::bitset<32> sample_bits(sample_conv.uint_val);
+
+  if(prob >= 1.0) {
+    sample_bits.flip();
+  } else {
+    for(int i = 0; i < 32; i++){
+      if((((float) rand()) / INT_MAX) < prob){
+	sample_bits.flip(i); 
+      }
+    }
+  }
+  
+  // convert back
+  sample_conv.uint_val = sample_bits.to_ulong();
+  
+  return sample_conv.float_val;
 }
 
 /*
@@ -253,6 +286,8 @@ struct options_container {
 
   float initial_gain;
 
+  float flip_prob;
+  
   int channel_offset;
   
   // kill samples to make it all fuzzy !
@@ -410,10 +445,13 @@ struct filter_params {
   int channels;
   float gain;
   bool filter = false;
+
+  float flippiness;
   
   filter_params (options_container& opts, int channels) {
     mode = opts.initial_mode;
     gain = opts.initial_gain;
+    flippiness = opts.flip_prob;
     this->channels = channels;
     
     cmd_queue = new lfree::spsc_queue<filter_command_container>(10);
@@ -549,28 +587,32 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
   float* in_buf = (float *) inputBuffer;
   float* out_buf = (float *) outputBuffer;
 
-  if(fpar->mode == PMODE::MILD){
-    for (unsigned int i = 0; i < nBufferFrames * fpar->channels; i++) {
+  for (unsigned int i = 0; i < nBufferFrames * fpar->channels; i++) {
+    float current_sample = in_buf[i];
 
-      float current_sample = in_buf[i];
-
+    if(fpar->flippiness > 0.0) {
+      current_sample = random_flip(in_buf[i], fpar->flippiness);
+    }
+   
+    if(fpar->mode == PMODE::MILD){
       // weed out impossible values ... while this kinda takes some of the edge off,
       // it enables us to use some stuff like filters and gain ...
       if (isnan(current_sample)) current_sample = 0;    
       if (current_sample < -1.0) current_sample = -1.0;
       if (current_sample > 1.0) current_sample = 1.0;
-      if (fpar->filter) {
-	current_sample *= fpar->gain;
-	out_buf[i] = fpar->fbank->apply(i % fpar->channels, current_sample);	  	
+    }
+    
+    if (fpar->filter) {
+      current_sample *= fpar->gain;
+      out_buf[i] = fpar->fbank->apply(i % fpar->channels, current_sample);	  	
+    } else {
+      if(fpar->mode == PMODE::MILD){
+	out_buf[i] = current_sample * fpar->gain;
       } else {
-	out_buf[i] = current_sample * fpar->gain;	  	
+	out_buf[i] = current_sample;
       }
     }
-  } else {
-    // in pure prox mode, all kinds of manipulations hardly make sense
-    for (unsigned int i = 0; i < nBufferFrames * fpar->channels; i++) {
-      out_buf[i] = in_buf[i];
-    }
+
   }
 
   return 0;
@@ -601,6 +643,7 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("buffer-cut", po::value<float>(&opts.buffer_cut)->default_value(2), "Don't fill source output buffer completely!")
     ("offset-mod", po::value<float>(&opts.offset_cut)->default_value(2), "Modify offset increment (chunk size read from buffer)!")
     ("fuzziness", po::value<float>(&opts.fuzziness)->default_value(0.0), "Create fuzziness by removing random samples with a certain probability!")
+    ("flippiness", po::value<float>(&opts.flip_prob)->default_value(0.0), "Create different fuzziness by flipping bits a certain probability!")
     ("read-type", po::value<RWTYPES>(&opts.read_type)->default_value(SHORT), "Type used to read from audio file!")
     ("write-type", po::value<RWTYPES>(&opts.write_type)->default_value(SHORT), "Type used to write to audio buffer!")
     ("stream-type", po::value<RWTYPES>(&opts.stream_type)->default_value(SHORT), "Type used for the audio stream!")
