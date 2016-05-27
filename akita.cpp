@@ -103,7 +103,7 @@ std::istream &operator>>(std::istream &in, PMODE &pmode) {
 
 // commands to control audio threads 
 namespace COMMAND {
-  enum COMMAND { MODE_CHANGE, STATE_CHANGE, SAMPLERATE_CHANGE, FUZZINESS_CHANGE, GAIN_CHANGE, FILTER_ON, FILTER_OFF, LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
+  enum COMMAND { MODE_CHANGE, STATE_CHANGE, SAMPLERATE_CHANGE, FUZZINESS_CHANGE, GAIN_CHANGE, MEAN_FILTER_ON, MEAN_FILTER_OFF, FILTER_ON, FILTER_OFF, LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
 }
 
 /*
@@ -155,11 +155,11 @@ struct canonical_sos_filter {
     update(5000, 2, 44100, LP);
   }
 
-  canonical_sos_filter(double frequency, double q, int samplerate, FMODE mode){
+  canonical_sos_filter(float frequency, float q, int samplerate, FMODE mode){
     update(frequency, q, samplerate, mode);
   }
 
-  void update(double frequency, double q, int samplerate, FMODE mode) {    
+  void update(float frequency, float q, int samplerate, FMODE mode) {    
     del1 = 0;
     del2 = 0;
     k = tanh( (M_PI*frequency) / samplerate);
@@ -185,10 +185,11 @@ struct canonical_sos_filter {
       b0 = ((pow(k,2) * q) - k + q) / ((pow(k,2) * q) + k + q);
       b1 = (2 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
       b2 = 1.0;      
+
     }
   }
 
-  double calculate(float sample){
+  float calculate(float sample){
     float intermediate = sample + ((-1.0 * a1) * del1) + ((-1.0 * a2) * del2);
     float out = (b0 * intermediate) + (b1 * del1) + (b2 * del2);
     del2 = del1;
@@ -201,9 +202,109 @@ struct canonical_sos_filter {
   }
 };
 
-// a simple filterbank consisting of several state-variable filters
+/*
+ * simple mean filter, to shave the edge off a little ...
+ */
+struct simple_mean_filter {
+  //float* kernel;
+  float* delay;
+  float factor;
+
+  bool initialized = false;
+  
+  short newest;
+  
+  short points;
+
+  simple_mean_filter(int points){
+    init(points);
+  }
+
+  // initialize with 7 points per default ...
+  simple_mean_filter(){
+    init(13);
+  }
+  
+  ~simple_mean_filter(){
+    //    delete[] kernel;
+    delete[] delay;
+  }
+
+  void init(int points){
+    if(initialized){
+      delete[] delay;
+    }
+    this->points = points;
+    newest = 0;
+    //kernel = new float[points];
+    factor = 1.0f / points;
+
+    delay = new float[points];
+
+    // initialize kernel
+    for(int i = 0; i < points; i++){
+      //kernel[i] = 1.0f / points;
+      delay[i] = 0.0f;
+    }
+    initialized = true;
+  }
+
+  float calculate(float sample){
+    float out = 0.0;
+
+    newest++;
+
+    if (newest >= points) {
+      newest = 0;
+    }
+
+    delay[newest] = sample;
+	
+    // calculate convolution
+    short delay_index = newest;
+    for (int i = 0; i < points; i++) {
+      
+      //out += kernel[i] * delay[delay_index];
+      out += factor * delay[delay_index];
+
+      delay_index--;
+    
+      if (delay_index <= 0) {
+	delay_index = points - 1;
+      }
+    }
+
+    return out;        
+  }
+
+  void apply(float& sample){
+    sample = calculate(sample);
+  }
+};
+
+struct mean_filterbank {
+  simple_mean_filter* filters;
+  
+  mean_filterbank(int channels, int points){
+    filters = new simple_mean_filter[channels];
+    for(int i = 0; i < channels; i++){
+      //filters[i].init(points);
+    }
+  }
+
+  ~mean_filterbank(){
+    delete[] filters;
+  }
+
+  void apply(int channel, float& sample) {
+    filters[channel].apply(sample);
+  }
+};
+
+
+// a simple filterbank consisting of several sos filters
 struct filterbank {
-  filterbank(int channels, int samplerate, double lowcut, double hicut, int bands) {
+  filterbank(int channels, int samplerate, float lowcut, float hicut, int bands) {
     this->bands = bands;
     this->channels = channels;
     
@@ -233,13 +334,12 @@ struct filterbank {
   canonical_sos_filter* fbank;
   bool* fmask;
 
-  float apply(int channel, float& sample) {    
+  void apply(int channel, float& sample) {    
     for(int b = 0; b < bands; b++){
       if(fmask[b]){	
 	fbank[(channel * bands) + b].process(sample);
       }
     }
-    return sample;
   }
 
   void toggle_band(int band) {
@@ -289,6 +389,8 @@ struct options_container {
   float flip_prob;
   
   int channel_offset;
+
+  int mean_filter_points;
   
   // kill samples to make it all fuzzy !
   float fuzziness;
@@ -423,10 +525,22 @@ struct source_params {
     fuzziness = opts.fuzziness;
     
     fc = new file_container<READ_TYPE>(opts.filename);
-    buffer_cut = fc->channels;
-    offset_cut = fc->channels;
-    opts.buffer_cut = buffer_cut;
-    opts.offset_cut = offset_cut;
+    
+    // default handling ...
+    if(opts.offset_cut == 2){      
+      offset_cut = fc->channels;
+      opts.offset_cut = offset_cut;
+    } else {
+      offset_cut = opts.offset_cut;
+    }
+
+    if(opts.buffer_cut == 2){      
+      buffer_cut = fc->channels;
+      opts.buffer_cut = buffer_cut;
+    } else {
+      buffer_cut = opts.buffer_cut;
+    }
+       
     cmd_queue = new lfree::spsc_queue<source_command_container>(10);
   }
 
@@ -441,10 +555,13 @@ struct source_params {
 struct filter_params {
   lfree::spsc_queue<filter_command_container>* cmd_queue;
   filterbank* fbank; 
+  mean_filterbank* m_fbank;
+  
   PMODE mode;
   int channels;
   float gain;
   bool filter = false;
+  bool mean_filter = false;
 
   float flippiness;
   
@@ -456,12 +573,21 @@ struct filter_params {
     
     cmd_queue = new lfree::spsc_queue<filter_command_container>(10);
     fbank = new filterbank(channels, opts.samplerate, 100, 8000, 10);
+
+    
+    if(opts.mean_filter_points >= 0){
+      m_fbank = new mean_filterbank(channels, opts.mean_filter_points);
+      mean_filter = true;
+    } else {
+      m_fbank = new mean_filterbank(channels, 13);
+    }
   }
 
   ~filter_params () {
     //std::cout << "cleaning filter params" << std::endl;
     delete cmd_queue;
     delete fbank;
+    delete m_fbank;
   }
 };
 
@@ -581,15 +707,22 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       fpar->filter = true;
     } else if(fcont.cmd == COMMAND::FILTER_OFF) {
       fpar->filter = false;
+    } else if(fcont.cmd == COMMAND::MEAN_FILTER_ON) {
+      fpar->mean_filter = true;
+    } else if(fcont.cmd == COMMAND::MEAN_FILTER_OFF) {
+      fpar->mean_filter = false;
     }
   }
   
   float* in_buf = (float *) inputBuffer;
   float* out_buf = (float *) outputBuffer;
 
+  float current_sample = 0.0;
+  short channel = 0;
   for (unsigned int i = 0; i < nBufferFrames * fpar->channels; i++) {
-    float current_sample = in_buf[i];
-
+    current_sample = in_buf[i];
+    channel = i % fpar->channels;
+   
     if(fpar->flippiness > 0.0) {
       current_sample = random_flip(in_buf[i], fpar->flippiness);
     }
@@ -602,17 +735,19 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       if (current_sample > 1.0) current_sample = 1.0;
     }
     
-    if (fpar->filter) {
-      current_sample *= fpar->gain;
-      out_buf[i] = fpar->fbank->apply(i % fpar->channels, current_sample);	  	
-    } else {
-      if(fpar->mode == PMODE::MILD){
-	out_buf[i] = current_sample * fpar->gain;
-      } else {
-	out_buf[i] = current_sample;
-      }
+    if(fpar->mean_filter){
+      fpar->m_fbank->apply(channel, current_sample);
     }
+    
+    if (fpar->filter) {    
+      fpar->fbank->apply(channel, current_sample);      
+    } 
 
+    if(fpar->mode == PMODE::MILD){
+      current_sample *= fpar->gain;
+    } 
+  
+    out_buf[i] = current_sample;
   }
 
   return 0;
@@ -648,6 +783,7 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("write-type", po::value<RWTYPES>(&opts.write_type)->default_value(SHORT), "Type used to write to audio buffer!")
     ("stream-type", po::value<RWTYPES>(&opts.stream_type)->default_value(SHORT), "Type used for the audio stream!")
     ("channel-offset", po::value<int>(&opts.channel_offset)->default_value(0), "Offset to control channels (esp. useful for mono playback)!")
+    ("mean-filter", po::value<int>(&opts.mean_filter_points)->default_value(0), "Apply mean filter to shave the edge off a little!")
     
     ;
   // ----- end options ... what kind of syntax is this ??
@@ -710,7 +846,17 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       }
       fpar.cmd_queue->push(fcont);      
       break;
-      // gain control
+    case 'g':
+      if (fpar.mean_filter) {	
+	fcont.cmd = COMMAND::MEAN_FILTER_OFF;
+	std::cout << "mean (smoothing) filter off" << std::endl;
+      } else {
+	fcont.cmd = COMMAND::MEAN_FILTER_ON;
+	std::cout << "mean (smoothing) filter on" << std::endl;
+      }
+      fpar.cmd_queue->push(fcont);      
+      break;
+    // gain control
     case 'd':           
       fcont.cmd = COMMAND::GAIN_CHANGE;
       fcont.gain = fpar.gain + 0.05 >= 1.0 ? 1.0 :  fpar.gain + 0.05;
@@ -878,7 +1024,6 @@ int handle_audio(options_container& opts) {
 	rt_source_parameters.deviceId = i;
       }
     }
-
   } else {
     rt_source_parameters.deviceId = source.getDefaultOutputDevice();;
   }
