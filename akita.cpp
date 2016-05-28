@@ -575,7 +575,7 @@ struct filter_params {
     fbank = new filterbank(channels, opts.samplerate, 100, 8000, 10);
 
     
-    if(opts.mean_filter_points >= 0){
+    if(opts.mean_filter_points > 0){
       m_fbank = new mean_filterbank(channels, opts.mean_filter_points);
       mean_filter = true;
     } else {
