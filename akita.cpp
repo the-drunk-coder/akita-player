@@ -139,6 +139,8 @@ struct options_container {
 
   float start;
   float end;
+
+  bool mono;
 };
 
 // file container to load and store samples in buffer
@@ -161,12 +163,12 @@ struct file_container {
   int samplerate;
 
   // methods
-  file_container(std::string fname, float start, float end) {
+  file_container(std::string fname, float start, float end, bool mono) {
     name = fname;
     // libsndfile soundfilehandle ... 
     SndfileHandle file = SndfileHandle(name.c_str());
 
-    channels = file.channels();
+    channels = mono ? 1 : file.channels();
     // transfer some info
     samplerate = file.samplerate();
 
@@ -185,17 +187,30 @@ struct file_container {
   
     file_buffer = new READ_TYPE[samples];
 
-    int frame_chunksize = CHUNKSIZE * channels;
+    int frame_chunksize = CHUNKSIZE * file.channels();
 
     READ_TYPE *chunk_buffer = new READ_TYPE[frame_chunksize];
 
     // Read file into buffer -- could this be made faster ?
     long int read_offset = 0;
-    while (file.readf(chunk_buffer, CHUNKSIZE) == CHUNKSIZE) {
-      for (int i = 0; i < frame_chunksize; i++) {
-	file_buffer[read_offset + i] = chunk_buffer[i];
+    while (file.readf(chunk_buffer, CHUNKSIZE) == CHUNKSIZE) {      
+      if(mono) {
+	int chunk_index = 0;
+	for (int i = 0; i < CHUNKSIZE; i++) {
+	  file_buffer[read_offset + i] = 0;
+	  for(int j = 0; j < file.channels(); j++) {
+	    file_buffer[read_offset + i] += chunk_buffer[chunk_index + j] / file.channels();
+	    
+	  }
+	  chunk_index += file.channels();
+	}
+	read_offset += CHUNKSIZE;
+      } else {
+	for (int i = 0; i < frame_chunksize; i++) {	
+	  file_buffer[read_offset + i] = chunk_buffer[i];
+	}
+	read_offset += frame_chunksize;
       }
-      read_offset += frame_chunksize;
     }
     // not needed any longer !
     delete[] chunk_buffer;
@@ -274,7 +289,7 @@ struct source_params {
     sample_repeat = opts.sample_repeat;
     fuzziness = opts.fuzziness;
     
-    fc = new file_container<READ_TYPE>(opts.filename, opts.start, opts.end);
+    fc = new file_container<READ_TYPE>(opts.filename, opts.start, opts.end, opts.mono);
 
     // set starting point
     offset = fc->start_sample;
@@ -539,6 +554,7 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("stream-type", po::value<RWTYPES>(&opts.stream_type)->default_value(SHORT), "Type used for the audio stream!")
     ("channel-offset", po::value<int>(&opts.channel_offset)->default_value(0), "Offset to control channels (esp. useful for mono playback)!")
     ("mean-filter", po::value<int>(&opts.mean_filter_points)->default_value(0), "Apply mean filter to shave the edge off a little!")
+    ("mono", po::value<bool>(&opts.mono)->default_value(false), "Mixdown to mono!")
     
     ;
   // ----- end options ... what kind of syntax is this ??
