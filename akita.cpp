@@ -7,13 +7,12 @@
 #include <boost/lockfree/spsc_queue.hpp>
 #include "getch.h"
 #include "RtAudio.h"
-#include <cmath>
 #include <mutex>              
 #include <condition_variable>
 #include <string>
 #include <functional>
 #include <climits>
-#include <bitset>
+#include "akita_filters.h"
 
 namespace po = boost::program_options;
 namespace lfree = boost::lockfree;
@@ -107,259 +106,6 @@ namespace COMMAND {
 }
 
 /*
- * random bit flipping
- */
-union float_conv {
-  uint32_t uint_val;
-  float float_val;
-};
-
-float random_flip(float sample, float prob){
-
-  float_conv sample_conv;
-  sample_conv.float_val = sample;
-
-  //use a bitset
-  std::bitset<32> sample_bits(sample_conv.uint_val);
-
-  if(prob >= 1.0) {
-    sample_bits.flip();
-  } else {
-    for(int i = 0; i < 32; i++){
-      if((((float) rand()) / INT_MAX) < prob){
-	sample_bits.flip(i); 
-      }
-    }
-  }
-  
-  // convert back
-  sample_conv.uint_val = sample_bits.to_ulong();
-  
-  return sample_conv.float_val;
-}
-
-/*
- * Filter and filterbank
- */
-struct canonical_sos_filter {
-  enum FMODE {HP, BP, LP, NOTCH, AP};
-
-  float a1, a2;
-  float b0, b1, b2;
-  float k;
-  float q;
-
-  float del1, del2; 
-  
-  canonical_sos_filter(){
-    update(5000, 2, 44100, LP);
-  }
-
-  canonical_sos_filter(float frequency, float q, int samplerate, FMODE mode){
-    update(frequency, q, samplerate, mode);
-  }
-
-  void update(float frequency, float q, int samplerate, FMODE mode) {    
-    del1 = 0;
-    del2 = 0;
-    k = tanh( (M_PI*frequency) / samplerate);
-    a1 = (2.0 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
-    a2 = ((pow(k,2) * q) - k + q) / ((pow(k,2) * q) + k + q);
-    if (mode == FMODE::LP){
-      b0 = (pow(k,2) * q) / ((pow(k,2) * q) + k + q);
-      b1 = (2.0 * pow(k,2) * q) / ((pow(k,2) * q) + k + q);
-      b2 = b0;      
-    } else if (mode == FMODE::HP){
-      b0 = q / ((pow(k,2) * q) + k + q);
-      b1 = -1.0 * ((2.0 * q) / ((pow(k,2) * q) + k + q));
-      b2 = b0;      
-    } else if (mode == FMODE::BP){
-      b0 = k / ((pow(k,2) * q) + k + q);
-      b1 = 0;
-      b2 = -1.0 * b0;      
-    } else if (mode == FMODE::NOTCH){
-      b0 = (q * (1.0 + pow(k,2))) / ((pow(k,2) * q) + k + q);
-      b1 = (2 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
-      b2 = b0;      
-    } else if (mode == FMODE::AP){
-      b0 = ((pow(k,2) * q) - k + q) / ((pow(k,2) * q) + k + q);
-      b1 = (2 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
-      b2 = 1.0;      
-
-    }
-  }
-
-  float calculate(float sample){
-    float intermediate = sample + ((-1.0 * a1) * del1) + ((-1.0 * a2) * del2);
-    float out = (b0 * intermediate) + (b1 * del1) + (b2 * del2);
-    del2 = del1;
-    del1 = intermediate;
-    return out;
-  }
-
-  void process(float& sample){
-    sample = calculate(sample);          
-  }
-};
-
-/*
- * simple mean filter, to shave the edge off a little ...
- */
-struct simple_mean_filter {
-  //float* kernel;
-  float* delay;
-  float factor;
-
-  bool initialized = false;
-  
-  short newest;
-  
-  short points;
-
-  simple_mean_filter(int points){
-    init(points);
-  }
-
-  // initialize with 7 points per default ...
-  simple_mean_filter(){
-    init(13);
-  }
-  
-  ~simple_mean_filter(){
-    //    delete[] kernel;
-    delete[] delay;
-  }
-
-  void init(int points){
-    if(initialized){
-      delete[] delay;
-    }
-    this->points = points;
-    newest = 0;
-    //kernel = new float[points];
-    factor = 1.0f / points;
-
-    delay = new float[points];
-
-    // initialize kernel
-    for(int i = 0; i < points; i++){
-      //kernel[i] = 1.0f / points;
-      delay[i] = 0.0f;
-    }
-    initialized = true;
-  }
-
-  float calculate(float sample){
-    float out = 0.0;
-
-    newest++;
-
-    if (newest >= points) {
-      newest = 0;
-    }
-
-    delay[newest] = sample;
-	
-    // calculate convolution
-    short delay_index = newest;
-    for (int i = 0; i < points; i++) {
-      
-      //out += kernel[i] * delay[delay_index];
-      out += factor * delay[delay_index];
-
-      delay_index--;
-    
-      if (delay_index <= 0) {
-	delay_index = points - 1;
-      }
-    }
-
-    return out;        
-  }
-
-  void apply(float& sample){
-    sample = calculate(sample);
-  }
-};
-
-struct mean_filterbank {
-  simple_mean_filter* filters;
-  
-  mean_filterbank(int channels, int points){
-    filters = new simple_mean_filter[channels];
-    for(int i = 0; i < channels; i++){
-      //filters[i].init(points);
-    }
-  }
-
-  ~mean_filterbank(){
-    delete[] filters;
-  }
-
-  void apply(int channel, float& sample) {
-    filters[channel].apply(sample);
-  }
-};
-
-
-// a simple filterbank consisting of several sos filters
-struct filterbank {
-  filterbank(int channels, int samplerate, float lowcut, float hicut, int bands) {
-    this->bands = bands;
-    this->channels = channels;
-    
-    fbank = new canonical_sos_filter[channels * bands];
-
-    for(int ch = 0; ch < channels; ch++) {
-      fbank[ch * bands].update(lowcut, 1.5, samplerate, canonical_sos_filter::HP);
-      for(int b = 1; b < bands-1; b++) {
-	fbank[(ch * bands) + b].update(lowcut + (b * ((hicut - lowcut) / bands)) , 1.5, samplerate, canonical_sos_filter::NOTCH);
-      }
-      fbank[(ch * bands) + bands-1].update(hicut, 1.5, samplerate, canonical_sos_filter::LP);
-    }
-
-    fmask = new bool[bands];
-    for(int b = 0; b < bands; b++) {
-      fmask[b] = false;
-    }
-  }
-
-  ~filterbank() {
-    delete [] fbank;
-    delete [] fmask;
-  }
-
-  int bands;
-  int channels;
-  canonical_sos_filter* fbank;
-  bool* fmask;
-
-  void apply(int channel, float& sample) {    
-    for(int b = 0; b < bands; b++){
-      if(fmask[b]){	
-	fbank[(channel * bands) + b].process(sample);
-      }
-    }
-  }
-
-  void toggle_band(int band) {
-    if(fmask[band]) {
-      fmask[band] = false;
-    } else {
-      fmask[band] = true;
-    } 
-   }
-
-  void print_bands(){
-    std::cout << "Filter bands: ";
-    for(int i = 0; i < bands; i++){
-      std::cout << "[" << fmask[i] << "] ";
-    }
-    std::cout << std::endl;
-  }
-};
-
-/*
  * container for command line options
  */
 struct options_container {
@@ -371,8 +117,8 @@ struct options_container {
   unsigned int buffer_frames = 1024;
   
   PSTATE initial_state;
-
   PMODE initial_mode;
+  float initial_gain;
   
   // format glitch parameters
   RWTYPES read_type;
@@ -383,17 +129,16 @@ struct options_container {
   float buffer_cut;
   float offset_cut;
   float sample_repeat;
-
-  float initial_gain;
-
   float flip_prob;
+  // kill samples to make it all fuzzy !
+  float fuzziness;
   
   int channel_offset;
 
   int mean_filter_points;
-  
-  // kill samples to make it all fuzzy !
-  float fuzziness;
+
+  float start;
+  float end;
 };
 
 // file container to load and store samples in buffer
@@ -410,11 +155,13 @@ struct file_container {
   std::string name;
   long int samples;
   long int frames;
+  long int start_sample;
+  long int end_sample;
   short channels;
   int samplerate;
 
   // methods
-  file_container(std::string fname) {
+  file_container(std::string fname, float start, float end) {
     name = fname;
     // libsndfile soundfilehandle ... 
     SndfileHandle file = SndfileHandle(name.c_str());
@@ -432,6 +179,9 @@ struct file_container {
     }
     
     samples = frames * channels;
+
+    start_sample = (float) frames * start * channels;
+    end_sample = (float) frames * end * channels;
   
     file_buffer = new READ_TYPE[samples];
 
@@ -524,7 +274,10 @@ struct source_params {
     sample_repeat = opts.sample_repeat;
     fuzziness = opts.fuzziness;
     
-    fc = new file_container<READ_TYPE>(opts.filename);
+    fc = new file_container<READ_TYPE>(opts.filename, opts.start, opts.end);
+
+    // set starting point
+    offset = fc->start_sample;
     
     // default handling ...
     if(opts.offset_cut == 2){      
@@ -540,7 +293,7 @@ struct source_params {
     } else {
       buffer_cut = opts.buffer_cut;
     }
-       
+           
     cmd_queue = new lfree::spsc_queue<source_command_container>(10);
   }
 
@@ -651,8 +404,8 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   // transfer samples from file buffer to output !
   for (uint32_t i = 0; i < nBufferFrames * spar->fc->channels; i++) {   
     // loop in case we hit the file's end
-    if (spar->offset + i > fc->samples) {
-      spar->offset = 0;
+    if (spar->offset + i > fc->end_sample) {
+      spar->offset = fc->start_sample;
     }
     // copy samples        
     out_buf[i] = fc->file_buffer[spar->offset + i];    
@@ -774,6 +527,8 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("init-state", po::value<PSTATE>(&opts.initial_state)->default_value(PLAY), "Initial state!")    
     ("init-mode", po::value<PMODE>(&opts.initial_mode)->default_value(MILD), "Initial mode!")
     ("init-gain", po::value<float>(&opts.initial_gain)->default_value(0.5), "Initial gain (default: 0.5)!")
+    ("start", po::value<float>(&opts.start)->default_value(0.0), "Starting point within the sample, relative to length!")
+    ("end", po::value<float>(&opts.end)->default_value(1.0), "End point within the sample, relative to length!")
     ("sample-repeat", po::value<float>(&opts.sample_repeat)->default_value(1), "Repeat every sample n times!")
     ("buffer-cut", po::value<float>(&opts.buffer_cut)->default_value(2), "Don't fill source output buffer completely!")
     ("offset-mod", po::value<float>(&opts.offset_cut)->default_value(2), "Modify offset increment (chunk size read from buffer)!")
