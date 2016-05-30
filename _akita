@@ -1,0 +1,37 @@
+#compdef akita
+# -----------
+# Description
+# -----------
+#
+#  Completion script for akita, the noisy sample player
+#
+# -------
+# Authors
+# -------
+#
+#  * Niklas Reppel (nik@parkellipsen.de)
+#
+
+local -a options arguments 
+options=('--help:display help' \
+	 '--input-file:The input file - WAV of FLAC!' \
+    	 '--init-state:Initial state!'   \
+    	 '--init-mode:Initial mode!'     \
+	 '--init-gain:Initial gain default: 0.5!'  \
+    	 '--start:Starting point within the sample, relative to length!' \
+    	 '--end:End point within the sample, relative to length!' \
+    	 '--sample-repeat:Repeat every sample n times!' \
+    	 '--buffer-cut:Don`t fill source output buffer completely!' \
+    	 '--offset-mod:Modify offset increment chunk size read from buffer!' \
+    	 '--fuzziness:Create fuzziness by removing random samples with a certain probability!' \
+    	 '--flippiness:Create different fuzziness by flipping bits a certain probability!' \
+    	 '--read-type:Type used to read from audio file!' \
+    	 '--write-type:Type used to write to audio buffer!' \
+    	 '--stream-type:Type used for the audio stream!' \
+    	 '--channel-offset:Offset to control channels esp. useful for mono playback!' \
+    	 '--mean-filter:Apply mean filter to shave the edge off a little!' \
+    	 '--mono:Mixdown to mono!')
+arguments=('1:input file')
+_describe 'values' options -- arguments
+
+	   
