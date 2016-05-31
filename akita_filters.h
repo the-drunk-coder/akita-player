@@ -1,6 +1,8 @@
 #ifndef _AKITA_FILTERS_H_
 #define _AKITA_FILTERS_H_
 
+#include <cstdint>
+
 /*
  * random bit flipping
  */

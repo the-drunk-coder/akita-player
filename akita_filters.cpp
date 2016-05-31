@@ -47,23 +47,23 @@ void canonical_sos_filter::update (float frequency, float q, int samplerate, FMO
   a1 = (2.0 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
   a2 = ((pow(k,2) * q) - k + q) / ((pow(k,2) * q) + k + q);
 
-  if (mode == FMODE::LP){
+  if (mode == LP){
     b0 = (pow(k,2) * q) / ((pow(k,2) * q) + k + q);
     b1 = (2.0 * pow(k,2) * q) / ((pow(k,2) * q) + k + q);
     b2 = b0;      
-  } else if (mode == FMODE::HP){
+  } else if (mode == HP){
     b0 = q / ((pow(k,2) * q) + k + q);
     b1 = -1.0 * ((2.0 * q) / ((pow(k,2) * q) + k + q));
     b2 = b0;      
-  } else if (mode == FMODE::BP){
+  } else if (mode == BP){
     b0 = k / ((pow(k,2) * q) + k + q);
     b1 = 0;
     b2 = -1.0 * b0;      
-  } else if (mode == FMODE::NOTCH){
+  } else if (mode == NOTCH){
     b0 = (q * (1.0 + pow(k,2))) / ((pow(k,2) * q) + k + q);
     b1 = (2 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
     b2 = b0;      
-  } else if (mode == FMODE::AP){
+  } else if (mode == AP){
     b0 = ((pow(k,2) * q) - k + q) / ((pow(k,2) * q) + k + q);
     b1 = (2 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
     b2 = 1.0;        
