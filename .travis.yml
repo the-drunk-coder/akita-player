@@ -1,0 +1,17 @@
+# get required libraries
+before_install:
+  - sudo apt-get -qq update
+  - sudo apt-get install -y libboost-all-dev libsndfile libjack-jack2-dev
+
+# Enable C++ support
+language: cpp
+
+# Compiler selection
+compiler:
+  - gcc
+
+# Build steps
+script:
+  - mkdir build
+  - cd build
+  - cmake .. && make
