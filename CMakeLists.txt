@@ -10,7 +10,7 @@ if(NOT LIBSNDFILE)
 endif()
 
 # set compiler flags
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D__UNIX_JACK__")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -D__UNIX_JACK__")
 
 # internal libraries
 add_library(akita_filters STATIC akita_filters.cpp)
