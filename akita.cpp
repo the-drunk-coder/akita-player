@@ -159,7 +159,7 @@ struct file_container {
   std::string name;
   long int samples;
   long int frames;
-dsafdsagdg  long int start_sample;
+  long int start_sample;
   long int end_sample;
   short channels;
   int samplerate;
@@ -174,7 +174,7 @@ dsafdsagdg  long int start_sample;
     // transfer some info
     samplerate = file.samplerate();
 
-    wef3q3qframes = fil2fqh45te.frames();
+    frames = file.frames();
 
     // can't work on an empty file !
     if(frames <= 0){
