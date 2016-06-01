@@ -104,7 +104,11 @@ std::istream &operator>>(std::istream &in, PMODE &pmode) {
 
 // commands to control audio threads 
 namespace COMMAND {
-  enum COMMAND { MODE_CHANGE, STATE_CHANGE, SAMPLERATE_CHANGE, FUZZINESS_CHANGE, GAIN_CHANGE, MEAN_FILTER_ON, MEAN_FILTER_OFF, FILTER_ON, FILTER_OFF, LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
+  enum COMMAND { MODE_CHANGE, STATE_CHANGE, SAMPLERATE_CHANGE,
+		 FUZZINESS_CHANGE, GAIN_CHANGE, MEAN_FILTER_ON,
+		 MEAN_FILTER_OFF, FILTER_ON, FILTER_OFF,
+		 REVERB_ON, REVERB_OFF,
+		 LOOP_INIT, LOOP_FINISH, LOOP_RELEASE };
 }
 
 /*
@@ -333,7 +337,8 @@ struct filter_params {
   float gain;
   bool filter = false;
   bool mean_filter = false;
-
+  bool reverb = false;
+  
   float flippiness;
   
   filter_params (options_container& opts, int channels) {
@@ -344,9 +349,6 @@ struct filter_params {
     
     cmd_queue = new lfree::spsc_queue<filter_command_container>(10);
     fbank = new filterbank(channels, opts.samplerate, 100, 8000, 10);
-    //rev = new fv3::nrev_f;
-    //rev->setrt60(1);
-    
     
     if(opts.mean_filter_points > 0){
       m_fbank = new mean_filterbank(channels, opts.mean_filter_points);
@@ -360,8 +362,7 @@ struct filter_params {
     //std::cout << "cleaning filter params" << std::endl;
     delete cmd_queue;
     delete fbank;
-    delete m_fbank;
-    //delete rev;    
+    delete m_fbank;    
   }
 };
 
@@ -477,14 +478,18 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
   while(cmd_queue->pop(&fcont)){
     if(fcont.cmd == COMMAND::GAIN_CHANGE) {
       fpar->gain = fcont.gain;
-    } else if(fcont.cmd == COMMAND::FILTER_ON) {
+    } else if (fcont.cmd == COMMAND::FILTER_ON) {
       fpar->filter = true;
-    } else if(fcont.cmd == COMMAND::FILTER_OFF) {
+    } else if (fcont.cmd == COMMAND::FILTER_OFF) {
       fpar->filter = false;
-    } else if(fcont.cmd == COMMAND::MEAN_FILTER_ON) {
+    } else if (fcont.cmd == COMMAND::MEAN_FILTER_ON) {
       fpar->mean_filter = true;
-    } else if(fcont.cmd == COMMAND::MEAN_FILTER_OFF) {
+    } else if (fcont.cmd == COMMAND::MEAN_FILTER_OFF) {
       fpar->mean_filter = false;
+    } else if (fcont.cmd == COMMAND::REVERB_ON) {
+      fpar->reverb = true;
+    } else if (fcont.cmd == COMMAND::REVERB_OFF) {
+      fpar->reverb = false;
     }
   }
   
@@ -501,8 +506,6 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
     if(fpar->flippiness > 0.0) {
       current_sample = random_flip(in_buf[i], fpar->flippiness);
     }
-
-    current_sample = fpar->rev.tick(current_sample, channel);
    
     if(fpar->mode == PMODE::MILD){
       // weed out impossible values ... while this kinda takes some of the edge off,
@@ -522,7 +525,11 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
 
     if(fpar->mode == PMODE::MILD){
       current_sample *= fpar->gain;
-    } 
+    }
+
+    if(fpar->reverb){
+      current_sample = fpar->rev.tick(current_sample, channel);
+    }
   
     out_buf[i] = current_sample;
   }
@@ -629,6 +636,16 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       }
       fpar.cmd_queue->push(fcont);      
       break;
+    case 'r':
+      if (fpar.reverb) {	
+	fcont.cmd = COMMAND::REVERB_OFF;
+	std::cout << "reverb off" << std::endl;
+      } else {
+	fcont.cmd = COMMAND::REVERB_ON;
+	std::cout << "reverb on" << std::endl;
+      }
+      fpar.cmd_queue->push(fcont);      
+      break;
     case 'g':
       if (fpar.mean_filter) {	
 	fcont.cmd = COMMAND::MEAN_FILTER_OFF;
@@ -658,7 +675,7 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       scont.new_fuzziness = spar.fuzziness + 0.05 >= 1.0 ? 1.0 : spar.fuzziness + 0.05;
       std::cout << "fuzziness up, new fuzziness: " << scont.new_fuzziness << std::endl;
       spar.cmd_queue->push(scont);
-      break;
+      break;      
     case 'y':      
       scont.cmd = COMMAND::FUZZINESS_CHANGE;
       scont.new_fuzziness = spar.fuzziness - 0.05 <= 0.0 ? 0.0 : spar.fuzziness - 0.05;
@@ -749,7 +766,9 @@ int handle_audio(options_container& opts) {
   
   spar.fc->print_file_info();
   filter_params fpar(opts, spar.fc->channels);
-
+  fpar.rev.setEffectMix(0.2);
+  fpar.rev.setSampleRate(spar.fc->samplerate);
+  
   std::cout << "Current Parameters:" << std::endl;
   std::cout << "  Read type:     " << rwtypes_strings[opts.read_type] << std::endl;
   std::cout << "  Write type:    " << rwtypes_strings[opts.write_type] << std::endl;

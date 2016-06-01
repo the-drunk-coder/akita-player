@@ -1,6 +1,8 @@
 #cmake_minimum_required (VERSION 3.5)
 # use older version for travis compat ...
 cmake_minimum_required (VERSION 2.8)
+
+# add project name
 project (akita)
 
 # find required libs
