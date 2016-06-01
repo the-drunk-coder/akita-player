@@ -4,7 +4,7 @@ dist: trusty
 # get required libraries
 before_install:
   - sudo apt-get -qq update
-  - sudo apt-get install -y libboost-all-dev libsndfile1-dev libjack-jackd2-dev stk
+  - sudo apt-get install -y libboost-all-dev libsndfile1-dev libjack-jackd2-dev stk libstk0c2a
 
 # Enable C++ support
 language: cpp
