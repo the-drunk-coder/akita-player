@@ -13,9 +13,11 @@
 #include <functional>
 #include <climits>
 #include "akita_filters.h"
+#include <stk/FreeVerb.h>
 
 namespace po = boost::program_options;
 namespace lfree = boost::lockfree;
+
 
 // format enum
 enum RWTYPES { UCHAR, SHORT, FLOAT, DOUBLE };
@@ -157,7 +159,7 @@ struct file_container {
   std::string name;
   long int samples;
   long int frames;
-  long int start_sample;
+dsafdsagdg  long int start_sample;
   long int end_sample;
   short channels;
   int samplerate;
@@ -172,7 +174,7 @@ struct file_container {
     // transfer some info
     samplerate = file.samplerate();
 
-    frames = file.frames();
+    wef3q3qframes = fil2fqh45te.frames();
 
     // can't work on an empty file !
     if(frames <= 0){
@@ -324,6 +326,7 @@ struct filter_params {
   lfree::spsc_queue<filter_command_container>* cmd_queue;
   filterbank* fbank; 
   mean_filterbank* m_fbank;
+  stk::FreeVerb rev;
   
   PMODE mode;
   int channels;
@@ -341,7 +344,9 @@ struct filter_params {
     
     cmd_queue = new lfree::spsc_queue<filter_command_container>(10);
     fbank = new filterbank(channels, opts.samplerate, 100, 8000, 10);
-
+    //rev = new fv3::nrev_f;
+    //rev->setrt60(1);
+    
     
     if(opts.mean_filter_points > 0){
       m_fbank = new mean_filterbank(channels, opts.mean_filter_points);
@@ -356,6 +361,7 @@ struct filter_params {
     delete cmd_queue;
     delete fbank;
     delete m_fbank;
+    //delete rev;    
   }
 };
 
@@ -490,10 +496,13 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
   for (unsigned int i = 0; i < nBufferFrames * fpar->channels; i++) {
     current_sample = in_buf[i];
     channel = i % fpar->channels;
-   
+    //channel = i > nBufferFrames ? 1 : 0;
+    
     if(fpar->flippiness > 0.0) {
       current_sample = random_flip(in_buf[i], fpar->flippiness);
     }
+
+    current_sample = fpar->rev.tick(current_sample, channel);
    
     if(fpar->mode == PMODE::MILD){
       // weed out impossible values ... while this kinda takes some of the edge off,
@@ -501,7 +510,7 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       if (isnan(current_sample)) current_sample = 0;    
       if (current_sample < -1.0) current_sample = -1.0;
       if (current_sample > 1.0) current_sample = 1.0;
-    }
+    }  
     
     if(fpar->mean_filter){
       fpar->m_fbank->apply(channel, current_sample);
@@ -517,6 +526,9 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
   
     out_buf[i] = current_sample;
   }
+  
+  
+  //fpar->rev->processreplace(in_buf, in_buf + nBufferFrames, out_buf, out_buf + nBufferFrames, nBufferFrames);
 
   return 0;
 }
@@ -774,6 +786,7 @@ int handle_audio(options_container& opts) {
     rt_filter_in_parameters.firstChannel = opts.channel_offset;
 
     RtAudio::StreamOptions rt_filter_opts;
+    // rt_filter_opts.flags = RTAUDIO_NONINTERLEAVED;
     rt_filter_opts.streamName = "akita-filter-";
     rt_filter_opts.streamName.append(str_pid.str());
     rt_filter_opts.autoConnectInput = false;
@@ -788,7 +801,7 @@ int handle_audio(options_container& opts) {
       e.printMessage();
       return EXIT_FAILURE;
     }
-
+    
     //find filter thread
     for(unsigned int i = 0; i < source.getDeviceCount(); i++){
       if (source.getDeviceInfo(i).name == rt_filter_opts.streamName){

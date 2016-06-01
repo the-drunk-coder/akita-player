@@ -29,6 +29,7 @@ target_link_libraries (akita boost_program_options)
 target_link_libraries (akita jack)
 target_link_libraries (akita pthread)
 target_link_libraries (akita rt)
+target_link_libraries (akita stk)
 
 # installation
 install(TARGETS akita DESTINATION bin)
