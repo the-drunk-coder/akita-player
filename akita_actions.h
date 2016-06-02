@@ -7,46 +7,55 @@ namespace akita_actions {
 template <typename READ_TYPE>
 void change_gain (source_params<READ_TYPE>& spar, filter_params& fpar, float gain_mod) {
   filter_command_container fcont(COMMAND::GAIN_CHANGE);
-  fcont.gain = fpar.gain + gain_mod >= 1.0 ? 1.0 : fpar.gain + gain_mod;  
+  fcont.gain = fpar.gain + gain_mod >= 1.0 ? 1.0 : fpar.gain + gain_mod;
+  if(fcont.gain < 0) {fcont.gain = 0;}
+  std::cout << "gain change, new gain: " << fcont.gain << std::endl;
   fpar.cmd_queue->push(fcont);
  }
 
 template <typename READ_TYPE>
 void change_flippiness (source_params<READ_TYPE>& spar, filter_params& fpar, float flippiness_mod) {
   filter_command_container fcont(COMMAND::FLIPPINESS_CHANGE);
-  fcont.flippiness = fpar.flippiness + flippiness_mod >= 1.0 ? 1.0 : fpar.flippiness + flippiness_mod;  
+  fcont.flippiness = fpar.flippiness + flippiness_mod >= 1.0 ? 1.0 : fpar.flippiness + flippiness_mod;
+  std::cout << "flippiness change, new flippiness: " << fcont.flippiness << std::endl;
   fpar.cmd_queue->push(fcont);
  }
 
 template <typename READ_TYPE>
 void change_fuzziness (source_params<READ_TYPE>& spar, filter_params& fpar, float fuzziness_mod) {
   source_command_container scont(COMMAND::FUZZINESS_CHANGE);
-  scont.new_fuzziness = spar.fuzziness + fuzziness_mod >= 1.0 ? 1.0 : spar.fuzziness + fuzziness_mod;  
+  scont.new_fuzziness = spar.fuzziness + fuzziness_mod >= 1.0 ? 1.0 : spar.fuzziness + fuzziness_mod;
+  if(scont.new_fuzziness < 0){ scont.new_fuzziness = 0;}  
+  std::cout << "fuzziness change, new fuzziness: " << scont.new_fuzziness << std::endl;
   spar.cmd_queue->push(scont);
  }
 
 template <typename READ_TYPE>
 void change_samplerate (source_params<READ_TYPE>& spar, filter_params& fpar, int samplerate_mod) {
   source_command_container scont(COMMAND::SAMPLERATE_CHANGE);  
-  scont.new_sample_repeat = spar.sample_repeat + samplerate_mod <= 0 ? 1 : spar.sample_repeat + samplerate_mod;  
+  scont.new_sample_repeat = spar.sample_repeat + samplerate_mod <= 0 ? 1 : spar.sample_repeat + samplerate_mod;
+  std::cout << "sample repetition change, new sample repetition: " << scont.new_sample_repeat << std::endl;
   spar.cmd_queue->push(scont);
  }
  
 template <typename READ_TYPE>
 void toggle_filter (source_params<READ_TYPE>& spar, filter_params& fpar) {
   filter_command_container fcont(COMMAND::TOGGLE_FILTER);
+  std::cout << "filter toggled, now: " << !fpar.filter << std::endl;
   fpar.cmd_queue->push(fcont);
  }
 
 template <typename READ_TYPE>
 void toggle_reverb (source_params<READ_TYPE>& spar, filter_params& fpar) {
   filter_command_container fcont(COMMAND::TOGGLE_REVERB);
+  std::cout << "reverb toggled, now: " << !fpar.reverb << std::endl;
   fpar.cmd_queue->push(fcont);
  }
 
 template <typename READ_TYPE>
 void toggle_mean_filter (source_params<READ_TYPE>& spar, filter_params& fpar) {
   filter_command_container fcont(COMMAND::TOGGLE_MEAN_FILTER);
+  std::cout << "mean filter toggled, now: " << !fpar.mean_filter << std::endl;
   fpar.cmd_queue->push(fcont);
  }
 
@@ -62,6 +71,7 @@ void toggle_mute (source_params<READ_TYPE>& spar, filter_params& fpar) {
   } else if (spar.state == LOOP_SILENCE) {
     scont.new_state = LOOP;
   }
+  std::cout << "mute toggled, now: " << scont.new_state << std::endl;
   spar.cmd_queue->push(scont);
  }
  
@@ -96,6 +106,7 @@ void toggle_block (source_params<READ_TYPE>& spar, filter_params& fpar, std::con
     scont.new_state = PLAY;
     cv.notify_all();
   }
+  std::cout << "blocking toggled, now: " << scont.new_state << std::endl;
   spar.cmd_queue->push(scont);
 }
 
@@ -104,7 +115,8 @@ void toggle_filter_band (source_params<READ_TYPE>& spar, filter_params& fpar, ch
   // stupidly simple, but it seems to work ...
   if (input == '0'){input = 9;}
   else {input -= 49;}
-  fpar.fbank->toggle_band(input);  
+  fpar.fbank->toggle_band(input);
+  fpar.fbank->print_bands();
  }
  
 }

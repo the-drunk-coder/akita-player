@@ -267,8 +267,7 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
     case '8':
     case '9':
     case '0':
-      akita_actions::toggle_filter_band(spar, fpar, input);
-      fpar.fbank->print_bands();
+      akita_actions::toggle_filter_band(spar, fpar, input);      
       break;
     case 'f':      
       akita_actions::toggle_filter(spar, fpar);
@@ -291,7 +290,7 @@ void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
       akita_actions::change_fuzziness(spar, fpar, 0.01);
       break;      
     case 'y':      
-      akita_actions::change_fuzziness(spar, fpar, 0.01);
+      akita_actions::change_fuzziness(spar, fpar, -0.01);
       break;
       // samplerate control
     case 's':           
