@@ -14,6 +14,7 @@
 
 local -a options arguments 
 options=('--help:display help' \
+	 '--interface:interaction mode!' \
 	 '--input-file:The input file - WAV of FLAC!' \
     	 '--init-state:Initial state!'   \
     	 '--init-mode:Initial mode!'     \

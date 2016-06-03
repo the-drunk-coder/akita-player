@@ -13,10 +13,31 @@
 namespace lfree = boost::lockfree;
 
 // format enum
+enum INTERFACE {PLAIN, ADVANCED, OSC};
+
+// custom stream to extract enum from command line
+std::istream &operator>>(std::istream &in, INTERFACE &iface) {
+  std::string token;
+  in >> token;
+
+  boost::to_upper(token);
+
+  if (token == "PLAIN") {
+    iface = PLAIN;
+  } else if (token == "ADVANCED") {
+    iface = ADVANCED;
+  } else if (token == "OSC") {
+    iface = OSC;
+  } 
+  return in;
+}
+
+
+// format enum
 enum RWTYPES { UCHAR, SHORT, FLOAT, DOUBLE };
 
 // custom stream to extract enum from command line
-std::istream &operator>>(std::istream &in,  RWTYPES &rwtype) {
+std::istream &operator>>(std::istream &in, RWTYPES &rwtype) {
   std::string token;
   in >> token;
 
@@ -94,6 +115,8 @@ std::istream &operator>>(std::istream &in, PMODE &pmode) {
 
   return in;
 }
+
+
 
 // commands to control audio threads 
 namespace COMMAND {
@@ -243,6 +266,8 @@ struct filter_command_container {
  */
 struct options_container {
 
+  INTERFACE iface;
+  
   // the file we're working on 
   std::string filename;
 
@@ -305,7 +330,7 @@ struct source_params {
   float sample_repeat;
 
   float fuzziness;
-  
+    
   source_params(options_container& opts) {
     state = opts.initial_state;
     sample_repeat = opts.sample_repeat;

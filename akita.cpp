@@ -1,7 +1,6 @@
 #include <iostream>
 #include <algorithm>
 #include <iterator>
-
 #include <boost/program_options.hpp>
 #include "getch.h"
 #include "RtAudio.h"
@@ -10,14 +9,10 @@
 #include <string>
 #include <functional>
 #include <climits>
-
-
 #include "akita_structures.h"
 #include "akita_actions.h"
 
-
 namespace po = boost::program_options;
-
 
 // mutex and cv to block audio thread 
 std::mutex mtx;
@@ -183,9 +178,6 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
     out_buf[i] = current_sample;
   }
   
-  
-  //fpar->rev->processreplace(in_buf, in_buf + nBufferFrames, out_buf, out_buf + nBufferFrames, nBufferFrames);
-
   return 0;
 }
 
@@ -206,7 +198,8 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
   po::options_description desc("Parameters to use in a creative way");
   desc.add_options()
     ("help", "Display this help!")
-    ("input-file", po::value<std::string>(&opts.filename)->default_value(""), "The input file - WAV of FLAC!)")
+    ("interface", po::value<INTERFACE>(&opts.iface)->default_value(PLAIN), "Interaction mode")
+    ("input-file", po::value<std::string>(&opts.filename)->default_value(""), "The input file - WAV of FLAC!")    
     ("init-state", po::value<PSTATE>(&opts.initial_state)->default_value(PLAY), "Initial state!")    
     ("init-mode", po::value<PMODE>(&opts.initial_mode)->default_value(MILD), "Initial mode!")
     ("init-gain", po::value<float>(&opts.initial_gain)->default_value(0.5), "Initial gain (default: 0.5)!")
@@ -479,7 +472,14 @@ int main(int ac, char *av[]) {
     std::cout << "  double     64 Bit, double" << std::endl;
     return EXIT_SUCCESS;
   }
-   
-  //from here on, things must be parametrized
-  return handlers[init_key(opts.read_type, opts.write_type)](opts);;
+
+  if (opts.iface == ADVANCED) {
+    std::cout << "advanced mode not yet implemented" << std::endl;
+    return 1;
+  } else if (opts.iface == OSC) {
+    std::cout << "osc mode not yet implemented" << std::endl;
+    return 1;
+  } else {
+    return handlers[init_key(opts.read_type, opts.write_type)](opts);
+  }
 }
