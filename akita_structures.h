@@ -291,14 +291,19 @@ struct options_container {
   // kill samples to make it all fuzzy !
   float fuzziness;
   
-  int channel_offset;
+  //int channel_offset;
+
+  int out_channels;
+  float pan;
 
   int mean_filter_points;
 
   float start;
   float end;
 
-  bool mono;
+  float reverb;
+  
+  bool mono = true;
 };
 
 /*
@@ -381,12 +386,18 @@ struct filter_params {
   bool reverb = false;
   
   float flippiness;
+
+  float pan;
+
+  float* frame_buffer;
   
-  filter_params (options_container& opts, int channels) {
+  filter_params (options_container& opts) {
     mode = opts.initial_mode;
     gain = opts.initial_gain;
+    pan = opts.pan;
     flippiness = opts.flip_prob;
-    this->channels = channels;
+    this->channels = opts.out_channels;
+    frame_buffer = new float[channels];
     
     cmd_queue = new lfree::spsc_queue<filter_command_container>(10);
     fbank = new filterbank(channels, opts.samplerate, 100, 8000, 10);
@@ -403,7 +414,8 @@ struct filter_params {
     //std::cout << "cleaning filter params" << std::endl;
     delete cmd_queue;
     delete fbank;
-    delete m_fbank;    
+    delete m_fbank;
+    delete frame_buffer;
   }
 };
 

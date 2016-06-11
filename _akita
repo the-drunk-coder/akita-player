@@ -31,6 +31,7 @@ options=('--help:display help' \
     	 '--stream-type:Type used for the audio stream!' \
     	 '--channel-offset:Offset to control channels esp. useful for mono playback!' \
     	 '--mean-filter:Apply mean filter to shave the edge off a little!' \
+	 '--reverb:Reverb level!' \
     	 '--mono:Mixdown to mono!')
 arguments=('1:input file')
 _describe 'values' options -- arguments

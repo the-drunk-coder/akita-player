@@ -140,15 +140,14 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
   float* in_buf = (float *) inputBuffer;
   float* out_buf = (float *) outputBuffer;
 
-  float current_sample = 0.0;
-  short channel = 0;
-  for (unsigned int i = 0; i < nBufferFrames * fpar->channels; i++) {
-    current_sample = in_buf[i];
-    channel = i % fpar->channels;
-    //channel = i > nBufferFrames ? 1 : 0;
-    
+  //float current_sample = 0.0;
+
+  long int frame_offset = 0;
+  for (int i = 0; i < nBufferFrames; i++) {
+    float current_sample = in_buf[i];
+
     if(fpar->flippiness > 0.0) {
-      current_sample = random_flip(in_buf[i], fpar->flippiness);
+      current_sample = random_flip(current_sample, fpar->flippiness);
     }
    
     if(fpar->mode == PMODE::MILD){
@@ -160,22 +159,34 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
     }  
     
     if(fpar->mean_filter){
-      fpar->m_fbank->apply(channel, current_sample);
+      fpar->m_fbank->apply(0, current_sample);
     }
     
     if (fpar->filter) {    
-      fpar->fbank->apply(channel, current_sample);      
+      fpar->fbank->apply(0, current_sample);      
     } 
 
     if(fpar->mode == PMODE::MILD){
       current_sample *= fpar->gain;
     }
 
-    if(fpar->reverb){
-      current_sample = fpar->rev.tick(current_sample, channel);
+    // pan
+    int offset = (int) fpar->pan;
+    float ratio = fpar->pan - offset;
+
+    fpar->frame_buffer[offset] = current_sample * (1.0 - ratio);
+    fpar->frame_buffer[offset + 1] = current_sample * ratio;
+
+    if (fpar->reverb) {      
+      fpar->rev.tick(fpar->frame_buffer[offset], fpar->frame_buffer[offset + 1]);
+      fpar->frame_buffer[offset] = fpar->rev.lastOut(0);
+      fpar->frame_buffer[offset + 1] = fpar->rev.lastOut(1);
     }
-  
-    out_buf[i] = current_sample;
+
+    for (int j = 0; j < fpar->channels; j++) {
+      out_buf[frame_offset + j] = fpar->frame_buffer[j];
+    }
+    frame_offset += fpar->channels;    
   }
   
   return 0;
@@ -213,9 +224,11 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("read-type", po::value<RWTYPES>(&opts.read_type)->default_value(SHORT), "Type used to read from audio file!")
     ("write-type", po::value<RWTYPES>(&opts.write_type)->default_value(SHORT), "Type used to write to audio buffer!")
     ("stream-type", po::value<RWTYPES>(&opts.stream_type)->default_value(SHORT), "Type used for the audio stream!")
-    ("channel-offset", po::value<int>(&opts.channel_offset)->default_value(0), "Offset to control channels (esp. useful for mono playback)!")
+    ("pan", po::value<float>(&opts.pan)->default_value(0.5), "pan!")
+    ("out-channels", po::value<int>(&opts.out_channels)->default_value(2), "Offset to control channels (esp. useful for mono playback)!")
     ("mean-filter", po::value<int>(&opts.mean_filter_points)->default_value(0), "Apply mean filter to shave the edge off a little!")
-    ("mono", po::value<bool>(&opts.mono)->default_value(false), "Mixdown to mono!")
+    //("mono", po::value<bool>(&opts.mono)->default_value(true), "Mixdown to mono!")
+    ("reverb", po::value<float>(&opts.reverb)->default_value(0.4), "Reverb level!")
     
     ;
   // ----- end options ... what kind of syntax is this ??
@@ -328,8 +341,8 @@ int handle_audio(options_container& opts) {
   }
   
   spar.fc->print_file_info();
-  filter_params fpar(opts, spar.fc->channels);
-  fpar.rev.setEffectMix(0.2);
+  filter_params fpar(opts);
+  fpar.rev.setEffectMix(opts.reverb);
   fpar.rev.setSampleRate(spar.fc->samplerate);
   
   std::cout << "Current Parameters:" << std::endl;
@@ -359,13 +372,13 @@ int handle_audio(options_container& opts) {
   if(opts.initial_mode != PMODE::RAW){
     RtAudio::StreamParameters rt_filter_out_parameters;
     rt_filter_out_parameters.deviceId = filter.getDefaultOutputDevice();
-    rt_filter_out_parameters.nChannels = spar.fc->channels;
-    rt_filter_out_parameters.firstChannel = opts.channel_offset;
+    rt_filter_out_parameters.nChannels = opts.out_channels;
+    rt_filter_out_parameters.firstChannel = 0;
 
     RtAudio::StreamParameters rt_filter_in_parameters;
     rt_filter_in_parameters.deviceId = filter.getDefaultOutputDevice();
     rt_filter_in_parameters.nChannels = spar.fc->channels;
-    rt_filter_in_parameters.firstChannel = opts.channel_offset;
+    rt_filter_in_parameters.firstChannel = 0;
 
     RtAudio::StreamOptions rt_filter_opts;
     // rt_filter_opts.flags = RTAUDIO_NONINTERLEAVED;
