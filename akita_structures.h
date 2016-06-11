@@ -388,6 +388,9 @@ struct filter_params {
   float flippiness;
 
   float pan;
+  // pan
+  int offset;
+  float ratio;
 
   float* frame_buffer;
   
@@ -395,6 +398,11 @@ struct filter_params {
     mode = opts.initial_mode;
     gain = opts.initial_gain;
     pan = opts.pan;
+
+    // pan
+    offset = (int) pan;
+    ratio = pan - offset;
+
     flippiness = opts.flip_prob;
     this->channels = opts.out_channels;
     frame_buffer = new float[channels];

@@ -114,7 +114,6 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   return 0;
 }
 
-
 // the callback function for the filter thread
 int filter_callback(void *outputBuffer, void *inputBuffer,
                  unsigned int nBufferFrames, double streamTime,
@@ -170,17 +169,14 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       current_sample *= fpar->gain;
     }
 
-    // pan
-    int offset = (int) fpar->pan;
-    float ratio = fpar->pan - offset;
-
-    fpar->frame_buffer[offset] = current_sample * (1.0 - ratio);
-    fpar->frame_buffer[offset + 1] = current_sample * ratio;
+    
+    fpar->frame_buffer[fpar->offset] = current_sample * (1.0 - fpar->ratio);
+    fpar->frame_buffer[fpar->offset + 1] = current_sample * fpar->ratio;
 
     if (fpar->reverb) {      
-      fpar->rev.tick(fpar->frame_buffer[offset], fpar->frame_buffer[offset + 1]);
-      fpar->frame_buffer[offset] = fpar->rev.lastOut(0);
-      fpar->frame_buffer[offset + 1] = fpar->rev.lastOut(1);
+      fpar->rev.tick(fpar->frame_buffer[fpar->offset], fpar->frame_buffer[fpar->offset + 1]);
+      fpar->frame_buffer[fpar->offset] = fpar->rev.lastOut(0);
+      fpar->frame_buffer[fpar->offset + 1] = fpar->rev.lastOut(1);
     }
 
     for (int j = 0; j < fpar->channels; j++) {
@@ -228,8 +224,7 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("out-channels", po::value<int>(&opts.out_channels)->default_value(2), "Offset to control channels (esp. useful for mono playback)!")
     ("mean-filter", po::value<int>(&opts.mean_filter_points)->default_value(0), "Apply mean filter to shave the edge off a little!")
     //("mono", po::value<bool>(&opts.mono)->default_value(true), "Mixdown to mono!")
-    ("reverb", po::value<float>(&opts.reverb)->default_value(0.4), "Reverb level!")
-    
+    ("reverb", po::value<float>(&opts.reverb)->default_value(0.4), "Reverb level!")    
     ;
   // ----- end options ... what kind of syntax is this ??
 
