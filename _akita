@@ -29,10 +29,11 @@ options=('--help:display help' \
     	 '--read-type:Type used to read from audio file!' \
     	 '--write-type:Type used to write to audio buffer!' \
     	 '--stream-type:Type used for the audio stream!' \
-    	 '--channel-offset:Offset to control channels esp. useful for mono playback!' \
+    	 '--out-channels:number of output channels!' \
     	 '--mean-filter:Apply mean filter to shave the edge off a little!' \
-	 '--reverb:Reverb level!' \
-    	 '--mono:Mixdown to mono!')
+	 '--reverb:Reverb level!' \	 
+    	 '--pan:channel panning')
+	 
 arguments=('1:input file')
 _describe 'values' options -- arguments
 
