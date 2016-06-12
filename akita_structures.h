@@ -9,6 +9,7 @@
 #include <sndfile.hh>
 #include "akita_filters.h"
 #include <stk/FreeVerb.h>
+#include <memory>
 
 namespace lfree = boost::lockfree;
 
@@ -73,7 +74,7 @@ std::map <RWTYPES, RtAudioFormat> rwtypes_rtaudio {
 };
 
 // the current state of the noise source
-enum PSTATE { POLL_EVENTS, PLAY, LOOP_REC, LOOP, LOOP_SILENCE, LOOP_BLOCK, SILENCE, BLOCK };
+enum PSTATE { WAIT_EVENT_START, PLAY, PLAY_EVENT, LOOP_REC, LOOP, LOOP_SILENCE, LOOP_BLOCK, SILENCE, BLOCK };
 
 // custom stream to extract enum from command line
 std::istream &operator>>(std::istream &in, PSTATE &pstate) {
@@ -131,19 +132,34 @@ namespace COMMAND {
 		 TOGGLE_REVERB,
 		 LOOP_INIT,
 		 LOOP_FINISH,
-		 LOOP_RELEASE
+		 LOOP_RELEASE,
+		 UPDATE_BOUNDS
   };
 }
 
 struct akita_play_event {
+  enum STATE { NEW, IN_PROGRESS, FINISHED };
+
+  STATE state = NEW;
+    
   float start;
   float end;
 
-  akita_play_event (float start, float end) {
+  double timestamp;
+
+  akita_play_event (){
+    start = end = 0.0;
+    timestamp = 0;
+    state = FINISHED;
+  }
+  
+  akita_play_event (float start, float end, double timestamp) {
     this->start = start;
     this->end = end;
+    this->timestamp = timestamp;
   }
 };
+
 
 // file container to load and store samples in buffer
 template <typename READ_TYPE>
@@ -151,7 +167,7 @@ struct file_container {
   enum STATE{ INIT, READY, FAILED };
 
   STATE state = INIT;
-
+  
   const int CHUNKSIZE = 1024;
   
   // fields
@@ -165,8 +181,8 @@ struct file_container {
   int samplerate;
 
   void update_range (akita_play_event ev) {
-    start_sample = (float) frames * ev.start * channels;
-    end_sample = (float) frames * ev.end * channels;
+    start_sample = (frames * ev.start) * channels;
+    end_sample = (frames * ev.end) * channels;
   }
   
   // methods
@@ -253,7 +269,7 @@ struct source_command_container {
   PSTATE new_state;
   float new_fuzziness;
   int new_sample_repeat;
-
+  
   source_command_container(){};
   
   source_command_container(COMMAND::COMMAND cmd){
@@ -307,7 +323,6 @@ struct options_container {
   float fuzziness;
   
   //int channel_offset;
-
   int out_channels;
   float pan;
 
@@ -337,7 +352,11 @@ struct source_params {
   // the command queue
   lfree::spsc_queue<source_command_container> cmd_queue;
   file_container<READ_TYPE> fc;
-  std::map<double, akita_play_event> event_map;
+
+  // current event, only necessary for osc mode 
+  std::unique_ptr<akita_play_event> current_event;
+
+  INTERFACE iface;
   
   // state ... playing, silent, blocking, looping etc
   PSTATE state = PLAY;
@@ -356,11 +375,17 @@ struct source_params {
 
   float fuzziness;
 
-  source_params(options_container& opts) :
-     event_map(),
+  short sample_resolution = 32;
+
+  source_params(options_container& opts) :     
      fc(opts.filename, opts.start, opts.end, opts.mono),
-     cmd_queue(10)
+     cmd_queue(10),
+     current_event(new akita_play_event())  
   {
+    iface = opts.iface;
+    if(opts.iface == OSC){
+      state = SILENCE;
+    }
     state = opts.initial_state;
     sample_repeat = opts.sample_repeat;
     fuzziness = opts.fuzziness;
@@ -430,8 +455,7 @@ struct filter_params {
     if(opts.mean_filter_points > 0){
       m_fbank.update(opts.mean_filter_points);
       mean_filter = true;
-    } 
-    
+    }     
   }
 
   ~filter_params () {

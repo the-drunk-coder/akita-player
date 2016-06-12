@@ -2,15 +2,17 @@
 #include <algorithm>
 #include <iterator>
 #include <boost/program_options.hpp>
-#include "getch.h"
-#include "RtAudio.h"
 #include <mutex>              
 #include <condition_variable>
 #include <string>
 #include <functional>
 #include <climits>
+#include <sys/time.h>
+#include <iomanip>
 #include <lo/lo.h>
 #include <lo/lo_cpp.h>
+#include "getch.h"
+#include "RtAudio.h"
 #include "akita_structures.h"
 #include "akita_actions.h"
 
@@ -24,20 +26,9 @@ std::condition_variable cv;
  * RtAudio callback functions for source- and filter clients.
  */
 
-// The parameterized generator callback function ...
-template <typename READ_TYPE, typename WRITE_TYPE>
-int source_callback(void *outputBuffer, void *inputBuffer,
-                 unsigned int nBufferFrames, double streamTime,
-                 RtAudioStreamStatus status, void *userData) {
-  
-  // get the parameter container from the user data ...
-  source_params<READ_TYPE> *spar = reinterpret_cast<source_params<READ_TYPE> *>(userData);
+template <typename READ_TYPE>
+void process_commands (source_params<READ_TYPE> *spar) {
   lfree::spsc_queue<source_command_container>& cmd_queue = spar->cmd_queue;
-  file_container<READ_TYPE>& fc = spar->fc;
-
-  WRITE_TYPE *out_buf = (WRITE_TYPE *) outputBuffer;
-
-  // handle commands
   source_command_container scont;
   while(cmd_queue.pop(&scont)){
     if(scont.cmd == COMMAND::STATE_CHANGE){
@@ -54,8 +45,54 @@ int source_callback(void *outputBuffer, void *inputBuffer,
       spar->fuzziness = scont.new_fuzziness;
     } else if (scont.cmd == COMMAND::SAMPLERATE_CHANGE) {
       spar->sample_repeat = scont.new_sample_repeat;
-    }
+    } 
   }
+}
+
+// The parameterized generator callback function ...
+template <typename READ_TYPE, typename WRITE_TYPE>
+int source_callback(void *outputBuffer, void *inputBuffer,
+                 unsigned int nBufferFrames, double streamTime,
+                 RtAudioStreamStatus status, void *userData) {
+  
+  // get the parameter container from the user data ...
+  source_params<READ_TYPE> *spar = reinterpret_cast<source_params<READ_TYPE>*>(userData);  
+  file_container<READ_TYPE>& fc = spar->fc;
+
+  WRITE_TYPE *out_buf = (WRITE_TYPE *) outputBuffer;
+
+  if (status) { std::cout << "Stream underflow detected!" << std::endl; }
+  
+  uint32_t block_pos = 0;
+  if(spar->iface == PLAIN){
+    // in plain mode, commands are handled at the beginning of each block ...
+    process_commands(spar);
+  } else if (spar->iface == OSC) {
+    //std::cout << "OSC" << std::endl;
+    if (spar->current_event->state != akita_play_event::IN_PROGRESS) {
+      //std::cout << "WAIT OSC" << std::endl;
+      double step_time = streamTime;
+      int step_last = 0;
+      // wait for incoming event
+      for(int i = 0; i < nBufferFrames; i++) {	
+	if (i - step_last == 0) {
+	  step_time += ((1.0d / fc.samplerate) * spar->sample_resolution);
+	  step_last += spar->sample_resolution;
+	  // new event present ?
+	  if (spar->current_event->state == akita_play_event::NEW && step_time >= spar->current_event->timestamp) {
+	    std::cout << "PROCESSING event !" << std::endl << std::endl;
+	    process_commands(spar);
+	    fc.update_range(*spar->current_event);
+	    spar->offset = fc.start_sample;
+	    spar->state = PLAY_EVENT;
+	    spar->current_event->state = akita_play_event::IN_PROGRESS;	    
+	    break;
+	  } 	  
+	}
+	out_buf[block_pos++] = 0;			
+      }
+    }
+  }                         
 
   // block source thread ... might have an interesting effect ...
   if(spar->state == BLOCK || spar->state == LOOP_BLOCK){
@@ -63,9 +100,7 @@ int source_callback(void *outputBuffer, void *inputBuffer,
     cv.wait(lck);
     return 0;
   }
-
-  if (status) { std::cout << "Stream underflow detected!" << std::endl; }
-
+  
   // SILENCE ! I KILL YOU !!
   if (spar->state == SILENCE || spar->state == LOOP_SILENCE) {
     for (int i = 0; i < nBufferFrames * spar->buffer_cut; i++) {
@@ -76,10 +111,16 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   }
 
   // transfer samples from file buffer to output !
-  for (uint32_t i = 0; i < nBufferFrames * spar->fc.channels; i++) {   
+  for (uint32_t i = block_pos; i < nBufferFrames * fc.channels; i++) {   
     // loop in case we hit the file's end
     if (spar->offset + i > fc.end_sample) {
-      spar->offset = fc.start_sample;
+      if (spar->state == PLAY) {
+	spar->offset = fc.start_sample;
+      } else if (spar->state == PLAY_EVENT) {
+	spar->state = SILENCE;
+	spar->current_event->state = akita_play_event::FINISHED;
+	break;
+      }
     }
     // copy samples        
     out_buf[i] = fc.file_buffer[spar->offset + i];    
@@ -87,7 +128,7 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   
   // raw sample repetition vs channel-wise sample repetition ?
   // sample repetition
-  for (uint32_t i = 0; i < (nBufferFrames * spar->fc.channels) / spar->sample_repeat; i++) {
+  for (uint32_t i = block_pos; i < (nBufferFrames * fc.channels) / spar->sample_repeat; i++) {
     for(int j = 0; j < spar->sample_repeat; j++){
       out_buf[i+j] = out_buf[i];
     }
@@ -100,7 +141,7 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   
   // random sample shootout
   if(spar->fuzziness > 0.0){
-    for (uint32_t i = 0; i < nBufferFrames * spar->fc.channels; i++) {   
+    for (uint32_t i = block_pos; i < nBufferFrames * fc.channels; i++) {   
       if(rand() / (float) INT_MAX < spar->fuzziness){
 	out_buf[i] = 0.0;    
       }
@@ -108,7 +149,7 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   }
   
   // increament read offset
-  spar->offset += ((float) nBufferFrames * spar->offset_cut) / spar->sample_repeat;
+  spar->offset += ((float) (nBufferFrames - block_pos) * spar->offset_cut) / spar->sample_repeat;
   if((spar->state == LOOP) && (spar->offset >= spar->loop_end)){
     spar->offset = spar->loop_start;
   }
@@ -252,9 +293,18 @@ void stop_audio(RtAudio& source, RtAudio& filter, bool raw) {
   }
 }
 
+std::string doubleToText(const double & d)
+{
+    std::stringstream ss;
+    ss << std::setprecision( std::numeric_limits<double>::digits10+2);
+    //ss << std::setprecision( std::numeric_limits<int>::max() );
+    ss << d;
+    return ss.str();
+}
+
 template<typename READ_TYPE>
 void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, options_container& opts){
-  /*
+  
   // init osc server
   lo::ServerThread st(opts.udp_port);
 
@@ -267,29 +317,34 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
   double last_bundle_time;
   
   // bundle handlers 
-  st.add_bundle_handlers([](lo_timetag tt, void* userData){
-      std::cout << "RECIEVED OSC BUNDLE" << std::endl;
-      std::cout << " ---- now: " << doubleToText(now) << std::endl;
-      double tag = (double) tt.sec + ((double)tt.frac / INT_MAX);
-      std::cout << " ---- tag: " << doubleToText(tag) << std::endl << std::endl;
-      double* cur_bun = reinterpret_cast<double*>(userData);
-      *cur_bun = tag;
+  st.add_bundle_handlers([](lo_timetag tt, void* userData) {      
+      double tag = (double) tt.sec + ((double)tt.frac / INT_MAX);                 
+      double* last_bundle_time = reinterpret_cast<double*>(userData);
+      *last_bundle_time = tag;
       return 0;
     }, [](void* userData){
-      std::cout << "bundle handling finished!" << std::endl;
+      //std::cout << "bundle handling finished!" << std::endl;
       return 0;
-    }, &last_bundle_time);
+    }, (void*) &last_bundle_time);
 
   // message handlers 
   st.add_method("/akita/play", "ff",
-		[&last_bundle_time, &ad](lo_arg **argv, int count) {
-		  std::cout << "SCHEDULE event " << argv[0]->i << std::endl;
-		  std::cout << " ---- for: " << doubleToText(last_bundle_time)  << std::endl << std::endl;
-		  ad.event_map->insert(std::make_pair(last_bundle_time, event(argv[0]->i)));
+		[&last_bundle_time, &spar](lo_arg **argv, int count) {
+		  // otherwise, the event is still in progress
+		  if (!(spar.current_event != NULL && spar.current_event->state != akita_play_event::FINISHED)){
+		    std::cout << "RECIEVED EVENT !" << std::endl;
+		    std::cout << "---- from: " << argv[0]->f << std::endl;
+		    std::cout << "---- to: " << argv[1]->f << std::endl;
+		    std::cout << "---- at: " << doubleToText(last_bundle_time) << std::endl;
+		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->f, last_bundle_time));
+		    return 0;
+		  } 		  		  
 		});
 
   // start server 
-  st.start();*/
+  st.start();
+  char input;
+  while((input = getch()) != 'q');
 }
 
 template<typename READ_TYPE>
@@ -358,6 +413,7 @@ void handle_keyboard_input(source_params<READ_TYPE>& spar, filter_params& fpar )
     
   }
 }
+
 
 /*
 * The Audio initializing function !
@@ -429,6 +485,12 @@ int handle_audio(options_container& opts) {
 			&opts.buffer_frames, &filter_callback,
 			(void *)&fpar, &rt_filter_opts);
       filter.startStream();
+      //set timestamp
+      timeval tv;
+      gettimeofday(&tv, 0);
+      double stream_time =  2208988800.0 + (double) tv.tv_sec + (double)tv.tv_usec / 1000000;// + tv.tv_sec;
+      std::cout << "akita filter stream startup time: " << doubleToText(stream_time) << std::endl;
+      filter.setStreamTime(stream_time);
     } catch (RtAudioError &e) {
       e.printMessage();
       return EXIT_FAILURE;
@@ -458,16 +520,24 @@ int handle_audio(options_container& opts) {
 		       (void *)&spar, &source_opts);
     
     source.startStream();
+    // set timestamp
+    timeval tv;
+    gettimeofday(&tv, 0);
+    double stream_time =  2208988800.0 + (double) tv.tv_sec + (double)tv.tv_usec / 1000000;// + tv.tv_sec;
+    std::cout << "akita source stream startup time: " << doubleToText(stream_time) << std::endl;
+    source.setStreamTime(stream_time);
   } catch (RtAudioError &e) {
     e.printMessage();
     return EXIT_FAILURE;
   }
 
-  std::cout << "Playing ... press q to quit" << std::endl;
+  
   
   if(opts.iface == OSC){
+    std::cout << "Listening for OSC input ... press q to quit!" << std::endl;
     handle_osc_input(spar, fpar, opts);
   } else {
+    std::cout << "Playing ... press q to quit" << std::endl;
     handle_keyboard_input(spar, fpar);
   }
 
