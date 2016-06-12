@@ -71,11 +71,14 @@ struct simple_mean_filter {
 };
 
 struct mean_filterbank {
+  int channels;
   simple_mean_filter* filters;
   
   mean_filterbank (int channels, int points);
 
   ~mean_filterbank();
+  
+  void update(int points);
   
   void apply (int channel, float& sample);
 };

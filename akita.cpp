@@ -9,6 +9,8 @@
 #include <string>
 #include <functional>
 #include <climits>
+#include <lo/lo.h>
+#include <lo/lo_cpp.h>
 #include "akita_structures.h"
 #include "akita_actions.h"
 
@@ -30,14 +32,14 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   
   // get the parameter container from the user data ...
   source_params<READ_TYPE> *spar = reinterpret_cast<source_params<READ_TYPE> *>(userData);
-  lfree::spsc_queue<source_command_container>* cmd_queue = spar->cmd_queue;
-  file_container<READ_TYPE>* fc = spar->fc;
+  lfree::spsc_queue<source_command_container>& cmd_queue = spar->cmd_queue;
+  file_container<READ_TYPE>& fc = spar->fc;
 
   WRITE_TYPE *out_buf = (WRITE_TYPE *) outputBuffer;
 
   // handle commands
   source_command_container scont;
-  while(cmd_queue->pop(&scont)){
+  while(cmd_queue.pop(&scont)){
     if(scont.cmd == COMMAND::STATE_CHANGE){
       spar->state = scont.new_state;
     } else if (scont.cmd == COMMAND::LOOP_INIT) {
@@ -74,31 +76,31 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   }
 
   // transfer samples from file buffer to output !
-  for (uint32_t i = 0; i < nBufferFrames * spar->fc->channels; i++) {   
+  for (uint32_t i = 0; i < nBufferFrames * spar->fc.channels; i++) {   
     // loop in case we hit the file's end
-    if (spar->offset + i > fc->end_sample) {
-      spar->offset = fc->start_sample;
+    if (spar->offset + i > fc.end_sample) {
+      spar->offset = fc.start_sample;
     }
     // copy samples        
-    out_buf[i] = fc->file_buffer[spar->offset + i];    
+    out_buf[i] = fc.file_buffer[spar->offset + i];    
   }
   
   // raw sample repetition vs channel-wise sample repetition ?
   // sample repetition
-  for (uint32_t i = 0; i < (nBufferFrames * spar->fc->channels) / spar->sample_repeat; i++) {
+  for (uint32_t i = 0; i < (nBufferFrames * spar->fc.channels) / spar->sample_repeat; i++) {
     for(int j = 0; j < spar->sample_repeat; j++){
       out_buf[i+j] = out_buf[i];
     }
   }
   
   // buffercutting
-  for (uint32_t i = nBufferFrames * spar->buffer_cut; i < nBufferFrames * spar->fc->channels; i++) {           
+  for (uint32_t i = nBufferFrames * spar->buffer_cut; i < nBufferFrames * fc.channels; i++) {           
     out_buf[i] = 0.0;    
   }
   
   // random sample shootout
   if(spar->fuzziness > 0.0){
-    for (uint32_t i = 0; i < nBufferFrames * spar->fc->channels; i++) {   
+    for (uint32_t i = 0; i < nBufferFrames * spar->fc.channels; i++) {   
       if(rand() / (float) INT_MAX < spar->fuzziness){
 	out_buf[i] = 0.0;    
       }
@@ -120,11 +122,11 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
 	   RtAudioStreamStatus status, void *userData) {
 
   filter_params *fpar = reinterpret_cast<filter_params*>(userData);
-  lfree::spsc_queue<filter_command_container>* cmd_queue = fpar->cmd_queue;
+  lfree::spsc_queue<filter_command_container>& cmd_queue = fpar->cmd_queue;
 
   // handle commands
   filter_command_container fcont;
-  while(cmd_queue->pop(&fcont)){
+  while(cmd_queue.pop(&fcont)){
     if(fcont.cmd == COMMAND::GAIN_CHANGE) {
       fpar->gain = fcont.gain;
     } else if (fcont.cmd == COMMAND::TOGGLE_REVERB) {
@@ -158,17 +160,16 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
     }  
     
     if(fpar->mean_filter){
-      fpar->m_fbank->apply(0, current_sample);
+      fpar->m_fbank.apply(0, current_sample);
     }
     
     if (fpar->filter) {    
-      fpar->fbank->apply(0, current_sample);      
+      fpar->fbank.apply(0, current_sample);      
     } 
 
     if(fpar->mode == PMODE::MILD){
       current_sample *= fpar->gain;
     }
-
     
     fpar->frame_buffer[fpar->offset] = current_sample * (1.0 - fpar->ratio);
     fpar->frame_buffer[fpar->offset + 1] = current_sample * fpar->ratio;
@@ -224,7 +225,8 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("out-channels", po::value<int>(&opts.out_channels)->default_value(2), "Offset to control channels (esp. useful for mono playback)!")
     ("mean-filter", po::value<int>(&opts.mean_filter_points)->default_value(0), "Apply mean filter to shave the edge off a little!")
     //("mono", po::value<bool>(&opts.mono)->default_value(true), "Mixdown to mono!")
-    ("reverb", po::value<float>(&opts.reverb)->default_value(0.4), "Reverb level!")    
+    ("reverb", po::value<float>(&opts.reverb)->default_value(0.4), "Reverb level!")
+    ("udp-port", po::value<int>(&opts.udp_port)->default_value(19456), "UDP Port for OSC mode!")    
     ;
   // ----- end options ... what kind of syntax is this ??
 
@@ -251,7 +253,47 @@ void stop_audio(RtAudio& source, RtAudio& filter, bool raw) {
 }
 
 template<typename READ_TYPE>
-void handle_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
+void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, options_container& opts){
+  /*
+  // init osc server
+  lo::ServerThread st(opts.udp_port);
+
+  // an exception might be nice here ...
+  if (!st.is_valid()) {
+    std::cout << "Can't start udp server." << std::endl;
+    return;
+  }
+
+  double last_bundle_time;
+  
+  // bundle handlers 
+  st.add_bundle_handlers([](lo_timetag tt, void* userData){
+      std::cout << "RECIEVED OSC BUNDLE" << std::endl;
+      std::cout << " ---- now: " << doubleToText(now) << std::endl;
+      double tag = (double) tt.sec + ((double)tt.frac / INT_MAX);
+      std::cout << " ---- tag: " << doubleToText(tag) << std::endl << std::endl;
+      double* cur_bun = reinterpret_cast<double*>(userData);
+      *cur_bun = tag;
+      return 0;
+    }, [](void* userData){
+      std::cout << "bundle handling finished!" << std::endl;
+      return 0;
+    }, &last_bundle_time);
+
+  // message handlers 
+  st.add_method("/akita/play", "ff",
+		[&last_bundle_time, &ad](lo_arg **argv, int count) {
+		  std::cout << "SCHEDULE event " << argv[0]->i << std::endl;
+		  std::cout << " ---- for: " << doubleToText(last_bundle_time)  << std::endl << std::endl;
+		  ad.event_map->insert(std::make_pair(last_bundle_time, event(argv[0]->i)));
+		});
+
+  // start server 
+  st.start();*/
+}
+
+template<typename READ_TYPE>
+void handle_keyboard_input(source_params<READ_TYPE>& spar, filter_params& fpar ){
   char input;
   // main loop
   
@@ -330,15 +372,15 @@ int handle_audio(options_container& opts) {
   
   source_params<READ_TYPE> spar(opts);
 
-  if (spar.fc->state != file_container<READ_TYPE>::READY) {
+  if (spar.fc.state != file_container<READ_TYPE>::READY) {
     std::cout << "File \"" << opts.filename << "\" is not valid!" << std::endl;
     return EXIT_FAILURE;
   }
   
-  spar.fc->print_file_info();
+  spar.fc.print_file_info();
   filter_params fpar(opts);
   fpar.rev.setEffectMix(opts.reverb);
-  fpar.rev.setSampleRate(spar.fc->samplerate);
+  fpar.rev.setSampleRate(spar.fc.samplerate);
   
   std::cout << "Current Parameters:" << std::endl;
   std::cout << "  Read type:     " << rwtypes_strings[opts.read_type] << std::endl;
@@ -372,7 +414,7 @@ int handle_audio(options_container& opts) {
 
     RtAudio::StreamParameters rt_filter_in_parameters;
     rt_filter_in_parameters.deviceId = filter.getDefaultOutputDevice();
-    rt_filter_in_parameters.nChannels = spar.fc->channels;
+    rt_filter_in_parameters.nChannels = spar.fc.channels;
     rt_filter_in_parameters.firstChannel = 0;
 
     RtAudio::StreamOptions rt_filter_opts;
@@ -402,7 +444,7 @@ int handle_audio(options_container& opts) {
     rt_source_parameters.deviceId = source.getDefaultOutputDevice();;
   }
 
-  rt_source_parameters.nChannels = spar.fc->channels;
+  rt_source_parameters.nChannels = spar.fc.channels;
   rt_source_parameters.firstChannel = 0;
 
   RtAudio::StreamOptions source_opts;
@@ -423,8 +465,12 @@ int handle_audio(options_container& opts) {
 
   std::cout << "Playing ... press q to quit" << std::endl;
   
-  handle_input(spar, fpar);
-  
+  if(opts.iface == OSC){
+    handle_osc_input(spar, fpar, opts);
+  } else {
+    handle_keyboard_input(spar, fpar);
+  }
+
   try {
     stop_audio(source, filter, (opts.initial_mode == PMODE::RAW));
   } catch(RtAudioError &e){
@@ -483,10 +529,7 @@ int main(int ac, char *av[]) {
 
   if (opts.iface == ADVANCED) {
     std::cout << "advanced mode not yet implemented" << std::endl;
-    return 1;
-  } else if (opts.iface == OSC) {
-    std::cout << "osc mode not yet implemented" << std::endl;
-    return 1;
+    return EXIT_FAILURE;
   } else {
     return handlers[init_key(opts.read_type, opts.write_type)](opts);
   }

@@ -73,7 +73,7 @@ std::map <RWTYPES, RtAudioFormat> rwtypes_rtaudio {
 };
 
 // the current state of the noise source
-enum PSTATE { PLAY, LOOP_REC, LOOP, LOOP_SILENCE, LOOP_BLOCK, SILENCE, BLOCK };
+enum PSTATE { POLL_EVENTS, PLAY, LOOP_REC, LOOP, LOOP_SILENCE, LOOP_BLOCK, SILENCE, BLOCK };
 
 // custom stream to extract enum from command line
 std::istream &operator>>(std::istream &in, PSTATE &pstate) {
@@ -135,6 +135,16 @@ namespace COMMAND {
   };
 }
 
+struct akita_play_event {
+  float start;
+  float end;
+
+  akita_play_event (float start, float end) {
+    this->start = start;
+    this->end = end;
+  }
+};
+
 // file container to load and store samples in buffer
 template <typename READ_TYPE>
 struct file_container {
@@ -154,6 +164,11 @@ struct file_container {
   short channels;
   int samplerate;
 
+  void update_range (akita_play_event ev) {
+    start_sample = (float) frames * ev.start * channels;
+    end_sample = (float) frames * ev.end * channels;
+  }
+  
   // methods
   file_container(std::string fname, float start, float end, bool mono) {
     name = fname;
@@ -304,20 +319,25 @@ struct options_container {
   float reverb;
   
   bool mono = true;
+
+  int udp_port;
+  
 };
 
 /*
  * Parameter structs to pass to noise- and filter threads.
  */
 
+
+
 // params to pass to noise source
 template <typename READ_TYPE>
 struct source_params {
 
   // the command queue
-  lfree::spsc_queue<source_command_container>* cmd_queue;
-
-  file_container<READ_TYPE>* fc;
+  lfree::spsc_queue<source_command_container> cmd_queue;
+  file_container<READ_TYPE> fc;
+  std::map<double, akita_play_event> event_map;
   
   // state ... playing, silent, blocking, looping etc
   PSTATE state = PLAY;
@@ -335,47 +355,42 @@ struct source_params {
   float sample_repeat;
 
   float fuzziness;
-    
-  source_params(options_container& opts) {
+
+  source_params(options_container& opts) :
+     event_map(),
+     fc(opts.filename, opts.start, opts.end, opts.mono),
+     cmd_queue(10)
+  {
     state = opts.initial_state;
     sample_repeat = opts.sample_repeat;
     fuzziness = opts.fuzziness;
-    
-    fc = new file_container<READ_TYPE>(opts.filename, opts.start, opts.end, opts.mono);
-
+        
     // set starting point
-    offset = fc->start_sample;
+    offset = fc.start_sample;
     
     // default handling ...
     if(opts.offset_cut == 2){      
-      offset_cut = fc->channels;
+      offset_cut = fc.channels;
       opts.offset_cut = offset_cut;
     } else {
       offset_cut = opts.offset_cut;
     }
 
     if(opts.buffer_cut == 2){      
-      buffer_cut = fc->channels;
+      buffer_cut = fc.channels;
       opts.buffer_cut = buffer_cut;
     } else {
       buffer_cut = opts.buffer_cut;
     }
-           
-    cmd_queue = new lfree::spsc_queue<source_command_container>(10);
-  }
-
-  ~source_params(){
-    //std::cout << "cleaning source params" << std::endl;
-    delete fc;
-    delete cmd_queue;
-  }
+               
+  }  
 };
 
 // params for the filter 
 struct filter_params {
-  lfree::spsc_queue<filter_command_container>* cmd_queue;
-  filterbank* fbank; 
-  mean_filterbank* m_fbank;
+  lfree::spsc_queue<filter_command_container> cmd_queue;
+  filterbank fbank; 
+  mean_filterbank m_fbank;
   stk::FreeVerb rev;
   
   PMODE mode;
@@ -394,11 +409,16 @@ struct filter_params {
 
   float* frame_buffer;
   
-  filter_params (options_container& opts) {
+  filter_params (options_container& opts) :
+    cmd_queue(10),
+    fbank(opts.out_channels, opts.samplerate, 100, 8000, 10),
+    m_fbank(opts.out_channels, 7)
+  {
+    
     mode = opts.initial_mode;
     gain = opts.initial_gain;
     pan = opts.pan;
-
+    
     // pan
     offset = (int) pan;
     ratio = pan - offset;
@@ -406,23 +426,16 @@ struct filter_params {
     flippiness = opts.flip_prob;
     this->channels = opts.out_channels;
     frame_buffer = new float[channels];
-    
-    cmd_queue = new lfree::spsc_queue<filter_command_container>(10);
-    fbank = new filterbank(channels, opts.samplerate, 100, 8000, 10);
-    
+                
     if(opts.mean_filter_points > 0){
-      m_fbank = new mean_filterbank(channels, opts.mean_filter_points);
+      m_fbank.update(opts.mean_filter_points);
       mean_filter = true;
-    } else {
-      m_fbank = new mean_filterbank(channels, 13);
-    }
+    } 
+    
   }
 
   ~filter_params () {
-    //std::cout << "cleaning filter params" << std::endl;
-    delete cmd_queue;
-    delete fbank;
-    delete m_fbank;
+    //std::cout << "cleaning filter params" << std::endl;    
     delete frame_buffer;
   }
 };

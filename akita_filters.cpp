@@ -147,7 +147,14 @@ void simple_mean_filter::apply(float& sample){
 }
 
 mean_filterbank::mean_filterbank (int channels, int points) {
+  this->channels = channels;
   filters = new simple_mean_filter[channels];
+  for(int i = 0; i < channels; i++){
+    filters[i].init(points);
+  }
+}
+
+void mean_filterbank::update(int points){
   for(int i = 0; i < channels; i++){
     filters[i].init(points);
   }
