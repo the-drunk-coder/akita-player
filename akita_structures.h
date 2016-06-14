@@ -143,20 +143,17 @@ struct akita_play_event {
   STATE state = NEW;
     
   float start;
-  float end;
-
-  double timestamp;
-
-  akita_play_event (){
-    start = end = 0.0;
-    timestamp = 0;
+  int dur;
+  
+  akita_play_event () {
+    start = 0.0;
+    dur = 0;
     state = FINISHED;
   }
   
-  akita_play_event (float start, float end, double timestamp) {
+  akita_play_event (float start, int dur) {
     this->start = start;
-    this->end = end;
-    this->timestamp = timestamp;
+    this->dur = dur;
   }
 };
 
@@ -179,12 +176,7 @@ struct file_container {
   long int end_sample;
   short channels;
   int samplerate;
-
-  void update_range (akita_play_event ev) {
-    start_sample = (frames * ev.start) * channels;
-    end_sample = (frames * ev.end) * channels;
-  }
-  
+   
   // methods
   file_container(std::string fname, float start, float end, bool mono) {
     name = fname;
@@ -238,7 +230,15 @@ struct file_container {
     // not needed any longer !
     delete[] chunk_buffer;
     
-    state = READY;
+    state = READY;    
+  }
+
+  void update_range (akita_play_event ev) {
+    start_sample = (frames * ev.start) * channels;
+    end_sample = start_sample + ((samplerate / 1000) * ev.dur);
+    if(end_sample >= frames){
+      end_sample = frames;
+    }
   }
   
   ~file_container() {
@@ -336,7 +336,6 @@ struct options_container {
   bool mono = true;
 
   int udp_port;
-  
 };
 
 /*

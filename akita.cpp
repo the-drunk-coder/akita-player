@@ -67,20 +67,15 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   if(spar->iface == PLAIN){
     // in plain mode, commands are handled at the beginning of each block ...
     process_commands(spar);
-  } else if (spar->iface == OSC) {
-    //std::cout << "OSC" << std::endl;
-    if (spar->current_event->state != akita_play_event::IN_PROGRESS) {
-      //std::cout << "WAIT OSC" << std::endl;
-      double step_time = streamTime;
+  } else if (spar->iface == OSC) {    
+    if (spar->current_event->state != akita_play_event::IN_PROGRESS) {      
       int step_last = 0;
       // wait for incoming event
       for(int i = 0; i < nBufferFrames; i++) {	
-	if (i - step_last == 0) {
-	  step_time += ((1.0d / fc.samplerate) * spar->sample_resolution);
+	if (i - step_last == 0) {	  
 	  step_last += spar->sample_resolution;
 	  // new event present ?
-	  if (spar->current_event->state == akita_play_event::NEW && step_time >= spar->current_event->timestamp) {
-	    std::cout << "PROCESSING event !" << std::endl << std::endl;
+	  if (spar->current_event->state == akita_play_event::NEW) {	    
 	    process_commands(spar);
 	    fc.update_range(*spar->current_event);
 	    spar->offset = fc.start_sample;
@@ -293,15 +288,6 @@ void stop_audio(RtAudio& source, RtAudio& filter, bool raw) {
   }
 }
 
-std::string doubleToText(const double & d)
-{
-    std::stringstream ss;
-    ss << std::setprecision( std::numeric_limits<double>::digits10+2);
-    //ss << std::setprecision( std::numeric_limits<int>::max() );
-    ss << d;
-    return ss.str();
-}
-
 template<typename READ_TYPE>
 void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, options_container& opts){
   
@@ -313,38 +299,39 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
     std::cout << "Can't start udp server." << std::endl;
     return;
   }
-
-  double last_bundle_time;
-  
-  // bundle handlers 
-  st.add_bundle_handlers([](lo_timetag tt, void* userData) {      
-      double tag = (double) tt.sec + ((double)tt.frac / INT_MAX);                 
-      double* last_bundle_time = reinterpret_cast<double*>(userData);
-      *last_bundle_time = tag;
-      return 0;
-    }, [](void* userData){
-      //std::cout << "bundle handling finished!" << std::endl;
-      return 0;
-    }, (void*) &last_bundle_time);
-
+   
   // message handlers 
-  st.add_method("/akita/play", "ff",
-		[&last_bundle_time, &spar](lo_arg **argv, int count) {
+  st.add_method("/akita/play", "fi",
+		[&spar](lo_arg **argv, int count) {
 		  // otherwise, the event is still in progress
 		  if (!(spar.current_event != NULL && spar.current_event->state != akita_play_event::FINISHED)){
-		    std::cout << "RECIEVED EVENT !" << std::endl;
-		    std::cout << "---- from: " << argv[0]->f << std::endl;
-		    std::cout << "---- to: " << argv[1]->f << std::endl;
-		    std::cout << "---- at: " << doubleToText(last_bundle_time) << std::endl;
-		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->f, last_bundle_time));
+		    std::cout << "RECIEVED EVENT !" << std::endl;		    
+		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->i));
+		    return 0;
+		  } else {
+		    std::cout << "IGNORED EVENT !" << std::endl;
 		    return 0;
 		  } 		  		  
 		});
 
+  // mutex and cv to block audio thread 
+  std::mutex osc_mtx;
+  std::condition_variable osc_cv;
+
+  
+  // message handlers 
+  st.add_method("/akita/quit", "",
+		[&osc_cv](lo_arg **argv, int count) {
+		  std::cout << "Quitting akita instance!" << std::endl;
+		  osc_cv.notify_all();
+		});
+  
   // start server 
   st.start();
-  char input;
-  while((input = getch()) != 'q');
+
+  // wait for quit signal
+  std::unique_lock<std::mutex> lck(osc_mtx);
+  osc_cv.wait(lck);    
 }
 
 template<typename READ_TYPE>
@@ -432,6 +419,10 @@ int handle_audio(options_container& opts) {
     std::cout << "File \"" << opts.filename << "\" is not valid!" << std::endl;
     return EXIT_FAILURE;
   }
+
+  if(opts.iface == OSC) {
+    std::cout << "Listening on OSC port: " << opts.udp_port << std::endl << std::endl;
+  }
   
   spar.fc.print_file_info();
   filter_params fpar(opts);
@@ -486,11 +477,11 @@ int handle_audio(options_container& opts) {
 			(void *)&fpar, &rt_filter_opts);
       filter.startStream();
       //set timestamp
-      timeval tv;
-      gettimeofday(&tv, 0);
-      double stream_time =  2208988800.0 + (double) tv.tv_sec + (double)tv.tv_usec / 1000000;// + tv.tv_sec;
-      std::cout << "akita filter stream startup time: " << doubleToText(stream_time) << std::endl;
-      filter.setStreamTime(stream_time);
+      //timeval tv;
+      //gettimeofday(&tv, 0);
+      //double stream_time =  2208988800.0 + (double) tv.tv_sec + (double)tv.tv_usec / 1000000;// + tv.tv_sec;
+      //std::cout << "akita filter stream startup time: " << doubleToText(stream_time) << std::endl;
+      //filter.setStreamTime(stream_time);
     } catch (RtAudioError &e) {
       e.printMessage();
       return EXIT_FAILURE;
@@ -521,20 +512,18 @@ int handle_audio(options_container& opts) {
     
     source.startStream();
     // set timestamp
-    timeval tv;
-    gettimeofday(&tv, 0);
-    double stream_time =  2208988800.0 + (double) tv.tv_sec + (double)tv.tv_usec / 1000000;// + tv.tv_sec;
-    std::cout << "akita source stream startup time: " << doubleToText(stream_time) << std::endl;
-    source.setStreamTime(stream_time);
+    //timeval tv;
+    //gettimeofday(&tv, 0);
+    //double stream_time =  2208988800.0 + (double) tv.tv_sec + (double)tv.tv_usec / 1000000;// + tv.tv_sec;
+    //std::cout << "akita source stream startup time: " << doubleToText(stream_time) << std::endl;
+    //source.setStreamTime(stream_time);
   } catch (RtAudioError &e) {
     e.printMessage();
     return EXIT_FAILURE;
   }
-
-  
-  
+    
   if(opts.iface == OSC){
-    std::cout << "Listening for OSC input ... press q to quit!" << std::endl;
+    std::cout << "Listening for OSC input!" << std::endl;
     handle_osc_input(spar, fpar, opts);
   } else {
     std::cout << "Playing ... press q to quit" << std::endl;
