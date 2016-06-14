@@ -19,10 +19,14 @@ float random_flip(float sample, float prob);
 struct canonical_sos_filter {
   enum FMODE {HP, BP, LP, NOTCH, AP};
 
+  float frequency;
+  float q;
+  FMODE mode;
+  int samplerate;
+  
   float a1, a2;
   float b0, b1, b2;
-  float k;
-  float q;
+  float k;  
 
   float del1, del2; 
   
@@ -31,8 +35,9 @@ struct canonical_sos_filter {
   canonical_sos_filter (float frequency, float q, int samplerate, FMODE mode);
 
   // update filter parameters
+  void update ();
   void update (float frequency, float q, int samplerate, FMODE mode);
-
+  
   // calculate filtered sample
   float calculate (float sample);
 

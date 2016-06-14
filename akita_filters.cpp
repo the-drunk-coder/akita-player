@@ -31,14 +31,30 @@ float random_flip(float sample, float prob){
 
 //canonicalsos filter methods
 canonical_sos_filter::canonical_sos_filter () {
-  update(5000, 2, 44100, LP);
+  this->frequency = 5000;
+  this->mode = LP;
+  this->q = 2;
+  this->samplerate = 44100;
+  update();
 }
 
 canonical_sos_filter::canonical_sos_filter (float frequency, float q, int samplerate, FMODE mode) {
-  update(frequency, q, samplerate, mode);
+  this->frequency = frequency;
+  this->mode = mode;
+  this->q = q;
+  this->samplerate = samplerate;
+  update();
 }
 
-void canonical_sos_filter::update (float frequency, float q, int samplerate, FMODE mode) {    
+void canonical_sos_filter::update (float frequency, float q, int samplerate, FMODE mode){
+  this->frequency = frequency;
+  this->mode = mode;
+  this->q = q;
+  this->samplerate = samplerate;
+  update();
+}
+
+void canonical_sos_filter::update () {    
   del1 = 0;
   del2 = 0;
   

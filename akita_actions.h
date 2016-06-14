@@ -58,7 +58,7 @@ void toggle_mean_filter (source_params<READ_TYPE>& spar, filter_params& fpar) {
 
 template <typename READ_TYPE>
 void toggle_lowpass_filter (source_params<READ_TYPE>& spar, filter_params& fpar) {
-  fpar.lowpass_filter_on = !fpar.lowpass_filter_on;
+  fpar.lowpass_on = !fpar.lowpass_on;
   std::cout << "lowpass filter toggled, now: " << !fpar.mean_filter_on << std::endl;  
  }
 

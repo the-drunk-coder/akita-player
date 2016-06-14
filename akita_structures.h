@@ -9,8 +9,7 @@
 #include "akita_filters.h"
 #include <stk/FreeVerb.h>
 #include <memory>
-
-namespace lfree = boost::lockfree;
+#include <atomic>
 
 // format enum
 enum INTERFACE {PLAIN, ADVANCED, OSC};
@@ -367,7 +366,7 @@ struct filter_params {
   
   std::atomic<float> gain;
   
-  std::atomic<bool> lowpass_filter_on;
+  std::atomic<bool> lowpass_on;
   std::atomic<bool> filterbank_on;
   std::atomic<bool> mean_filter_on;
   std::atomic<bool> reverb_on;
@@ -391,7 +390,7 @@ struct filter_params {
     lowpass()
   {
 
-    lowpass_filter_on = false;
+    lowpass_on = false;
     filterbank_on = false;
     reverb_on = false;
     mean_filter_on = false;

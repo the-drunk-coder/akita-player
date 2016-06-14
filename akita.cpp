@@ -153,8 +153,12 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
     
     if (fpar->filterbank_on) {    
       fpar->fbank.apply(0, current_sample);      
-    } 
+    }
 
+    if (fpar->lowpass_on) {    
+      fpar->lowpass.process(current_sample);      
+    }
+    
     if(fpar->mode == PMODE::MILD){
       current_sample *= fpar->gain;
     }
@@ -269,40 +273,43 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
   
   // message handlers 
   st.add_method("/akita/param/reverb", "if",
-		[&spar, &fpar](lo_arg **argv, int count) {
-		  
+		[&spar, &fpar](lo_arg **argv, int count) {		  
+		  fpar.reverb_on = argv[0]->i;
+		  fpar.rev.setEffectMix(argv[1]->f);
 		});
-
 
   // message handlers 
   st.add_method("/akita/param/mean_filter", "ii",
 		[&spar, &fpar](lo_arg **argv, int count) {
-		  
+		  fpar.mean_filter_on = argv[0]->i;
 		});
 
   // message handlers 
   st.add_method("/akita/param/lowpass", "iff",
 		[&spar, &fpar](lo_arg **argv, int count) {
-		  
+		  fpar.lowpass_on = argv[0]->i;
+		  fpar.lowpass.q = argv[1]->f;
+		  fpar.lowpass.frequency = argv[2]->f;
+		  fpar.lowpass.update();
 		});
 
   // message handlers 
   st.add_method("/akita/param/flippiness", "f",
 		[&spar, &fpar](lo_arg **argv, int count) {
-		  
+		  akita_actions::change_flippiness(spar, fpar, argv[0]->f);
 		});
 
   // message handlers 
   st.add_method("/akita/param/fuzziness", "f",
 		[&spar, &fpar](lo_arg **argv, int count) {
-		  
+		  akita_actions::change_fuzziness(spar, fpar, argv[0]->f);
 		});
 
 
   // message handlers 
   st.add_method("/akita/param/gain", "f",
 		[&spar, &fpar](lo_arg **argv, int count) {
-		  akita_actions::change_gain(spar, fpar, -0.05);
+		  akita_actions::change_gain(spar, fpar, argv[0]->f);
 		});
 
 
@@ -417,8 +424,9 @@ int handle_audio(options_container& opts) {
   
   spar.fc.print_file_info();
   filter_params fpar(opts);
-  fpar.rev.setEffectMix(opts.reverb_mix);
   fpar.rev.setSampleRate(spar.fc.samplerate);
+  fpar.rev.setEffectMix(opts.reverb_mix);
+  
   
   std::cout << "Current Parameters:" << std::endl;
   std::cout << "  Read type:     " << rwtypes_strings[opts.read_type] << std::endl;
