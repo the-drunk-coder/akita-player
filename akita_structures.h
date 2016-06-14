@@ -4,7 +4,6 @@
 #include <iostream>
 #include <map>
 #include <boost/algorithm/string.hpp>
-#include <boost/lockfree/spsc_queue.hpp>
 #include "RtAudio.h"
 #include <sndfile.hh>
 #include "akita_filters.h"

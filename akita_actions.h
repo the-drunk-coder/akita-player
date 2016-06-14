@@ -1,3 +1,6 @@
+#ifndef _AKITA_ACTIONS_H_
+#define _AKITA_ACTIONS_H_
+
 #include <condition_variable>
 #include "akita_structures.h"
 #include <iostream>
@@ -113,3 +116,5 @@ void toggle_filter_band (source_params<READ_TYPE>& spar, filter_params& fpar, ch
  }
  
 }
+
+#endif
