@@ -33,7 +33,6 @@ std::istream &operator>>(std::istream &in, INTERFACE &iface) {
   return in;
 }
 
-
 // format enum
 enum RWTYPES { UCHAR, SHORT, FLOAT, DOUBLE };
 
@@ -117,26 +116,6 @@ std::istream &operator>>(std::istream &in, PMODE &pmode) {
   return in;
 }
 
-
-
-// commands to control audio threads 
-namespace COMMAND {
-  enum COMMAND { MODE_CHANGE,
-		 STATE_CHANGE,
-		 SAMPLERATE_CHANGE,
-		 FUZZINESS_CHANGE,
-		 FLIPPINESS_CHANGE,
-		 GAIN_CHANGE,
-		 TOGGLE_MEAN_FILTER,
-		 TOGGLE_FILTER,
-		 TOGGLE_REVERB,
-		 LOOP_INIT,
-		 LOOP_FINISH,
-		 LOOP_RELEASE,
-		 UPDATE_BOUNDS
-  };
-}
-
 struct akita_play_event {
   enum STATE { NEW, IN_PROGRESS, FINISHED };
 
@@ -144,6 +123,8 @@ struct akita_play_event {
     
   float start;
   int dur;
+  int length_samples;
+  int samples_played = 0;
   
   akita_play_event () {
     start = 0.0;
@@ -233,12 +214,13 @@ struct file_container {
     state = READY;    
   }
 
-  void update_range (akita_play_event ev) {
+  void update_range (akita_play_event& ev) {
     start_sample = (frames * ev.start) * channels;
-    end_sample = start_sample + ((samplerate / 1000) * ev.dur);
+    end_sample = start_sample + (((samplerate / 1000) * ev.dur) * channels);
     if(end_sample >= frames){
       end_sample = frames;
     }
+    ev.length_samples = end_sample - start_sample;
   }
   
   ~file_container() {
@@ -255,41 +237,6 @@ struct file_container {
 	      << std::endl;
   }
 
-};
-
-
-
-/*
- * Command Containers for source- and filter threads.
- */
-struct source_command_container {
-  COMMAND::COMMAND cmd;
-  
-  // parameters that could be subject to change
-  PSTATE new_state;
-  float new_fuzziness;
-  int new_sample_repeat;
-  
-  source_command_container(){};
-  
-  source_command_container(COMMAND::COMMAND cmd){
-    this->cmd = cmd;
-  }
-};
-
-struct filter_command_container {
-  COMMAND::COMMAND cmd;
-  
-  // parameters that could be subject to change
-  PMODE new_mode;
-  float gain;
-  float flippiness;
-
-  filter_command_container(){};
-  
-  filter_command_container(COMMAND::COMMAND cmd){
-    this->cmd = cmd;
-  }
 };
 
 /*
@@ -331,7 +278,7 @@ struct options_container {
   float start;
   float end;
 
-  float reverb;
+  float reverb_mix;
   
   bool mono = true;
 
@@ -341,15 +288,10 @@ struct options_container {
 /*
  * Parameter structs to pass to noise- and filter threads.
  */
-
-
-
 // params to pass to noise source
 template <typename READ_TYPE>
 struct source_params {
-
-  // the command queue
-  lfree::spsc_queue<source_command_container> cmd_queue;
+  
   file_container<READ_TYPE> fc;
 
   // current event, only necessary for osc mode 
@@ -358,33 +300,36 @@ struct source_params {
   INTERFACE iface;
   
   // state ... playing, silent, blocking, looping etc
-  PSTATE state = PLAY;
+  std::atomic<PSTATE> state;
 
   // loop params
-  long int loop_start = 0;
-  long int loop_end = 0;
+  std::atomic<long int> loop_start;
+  std::atomic<long int> loop_end;
 
   // the current position within the file buffer
-  long int offset = 0;
+  std::atomic<long int> offset;
 
   // buffer glitch parameters
-  float buffer_cut;
-  float offset_cut;
-  float sample_repeat;
+  std::atomic<float> buffer_cut;
+  std::atomic<float> offset_cut;
+  std::atomic<float> sample_repeat;
 
-  float fuzziness;
-
-  short sample_resolution = 32;
-
+  std::atomic<float> fuzziness;
+  
   source_params(options_container& opts) :     
-     fc(opts.filename, opts.start, opts.end, opts.mono),
-     cmd_queue(10),
+     fc(opts.filename, opts.start, opts.end, opts.mono),     
      current_event(new akita_play_event())  
   {
     iface = opts.iface;
     if(opts.iface == OSC){
       state = SILENCE;
+    } else {
+      state = PLAY;
     }
+    loop_start = 0;
+    loop_start = 0;
+    offset = 0;
+    
     state = opts.initial_state;
     sample_repeat = opts.sample_repeat;
     fuzziness = opts.fuzziness;
@@ -412,48 +357,58 @@ struct source_params {
 
 // params for the filter 
 struct filter_params {
-  lfree::spsc_queue<filter_command_container> cmd_queue;
+  
   filterbank fbank; 
   mean_filterbank m_fbank;
+  canonical_sos_filter lowpass;
   stk::FreeVerb rev;
   
   PMODE mode;
   int channels;
-  float gain;
-  bool filter = false;
-  bool mean_filter = false;
-  bool reverb = false;
   
-  float flippiness;
+  std::atomic<float> gain;
+  
+  std::atomic<bool> lowpass_filter_on;
+  std::atomic<bool> filterbank_on;
+  std::atomic<bool> mean_filter_on;
+  std::atomic<bool> reverb_on;
+  
+  std::atomic<float> flippiness;
 
-  float pan;
   // pan
-  int offset;
-  float ratio;
+  std::atomic<int> pan_offset;
+  std::atomic<float> pan_ratio;
 
   float* frame_buffer;
+
+  void update_pan(float pan){    
+    pan_offset = (int) pan;
+    pan_ratio = pan - pan_offset;
+  }
   
   filter_params (options_container& opts) :
-    cmd_queue(10),
     fbank(opts.out_channels, opts.samplerate, 100, 8000, 10),
-    m_fbank(opts.out_channels, 7)
+    m_fbank(opts.out_channels, 5),
+    lowpass()
   {
+
+    lowpass_filter_on = false;
+    filterbank_on = false;
+    reverb_on = false;
+    mean_filter_on = false;
     
     mode = opts.initial_mode;
     gain = opts.initial_gain;
-    pan = opts.pan;
-    
-    // pan
-    offset = (int) pan;
-    ratio = pan - offset;
 
+    update_pan(opts.pan);
+    
     flippiness = opts.flip_prob;
     this->channels = opts.out_channels;
     frame_buffer = new float[channels];
                 
     if(opts.mean_filter_points > 0){
       m_fbank.update(opts.mean_filter_points);
-      mean_filter = true;
+      mean_filter_on = true;
     }     
   }
 

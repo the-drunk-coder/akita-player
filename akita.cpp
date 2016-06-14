@@ -26,29 +26,6 @@ std::condition_variable cv;
  * RtAudio callback functions for source- and filter clients.
  */
 
-template <typename READ_TYPE>
-void process_commands (source_params<READ_TYPE> *spar) {
-  lfree::spsc_queue<source_command_container>& cmd_queue = spar->cmd_queue;
-  source_command_container scont;
-  while(cmd_queue.pop(&scont)){
-    if(scont.cmd == COMMAND::STATE_CHANGE){
-      spar->state = scont.new_state;
-    } else if (scont.cmd == COMMAND::LOOP_INIT) {
-      spar->loop_start = spar->offset;
-      spar->state = LOOP_REC;
-    } else if (scont.cmd == COMMAND::LOOP_FINISH) {
-      spar->loop_end = spar->offset;
-      spar->state = LOOP;
-    } else if (scont.cmd == COMMAND::LOOP_RELEASE) {      
-      spar->state = PLAY;
-    } else if (scont.cmd == COMMAND::FUZZINESS_CHANGE) {
-      spar->fuzziness = scont.new_fuzziness;
-    } else if (scont.cmd == COMMAND::SAMPLERATE_CHANGE) {
-      spar->sample_repeat = scont.new_sample_repeat;
-    } 
-  }
-}
-
 // The parameterized generator callback function ...
 template <typename READ_TYPE, typename WRITE_TYPE>
 int source_callback(void *outputBuffer, void *inputBuffer,
@@ -64,31 +41,21 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   if (status) { std::cout << "Stream underflow detected!" << std::endl; }
   
   uint32_t block_pos = 0;
-  if(spar->iface == PLAIN){
-    // in plain mode, commands are handled at the beginning of each block ...
-    process_commands(spar);
-  } else if (spar->iface == OSC) {    
+  if (spar->iface == OSC) {    
     if (spar->current_event->state != akita_play_event::IN_PROGRESS) {      
-      int step_last = 0;
-      // wait for incoming event
-      for(int i = 0; i < nBufferFrames; i++) {	
-	if (i - step_last == 0) {	  
-	  step_last += spar->sample_resolution;
-	  // new event present ?
-	  if (spar->current_event->state == akita_play_event::NEW) {	    
-	    process_commands(spar);
+      for (int i = 0; i < nBufferFrames * fc.channels; i++) {		
+	if (spar->current_event->state == akita_play_event::NEW) {
 	    fc.update_range(*spar->current_event);
 	    spar->offset = fc.start_sample;
 	    spar->state = PLAY_EVENT;
 	    spar->current_event->state = akita_play_event::IN_PROGRESS;	    
 	    break;
-	  } 	  
 	}
 	out_buf[block_pos++] = 0;			
-      }
+      }      
     }
-  }                         
-
+  }
+                       
   // block source thread ... might have an interesting effect ...
   if(spar->state == BLOCK || spar->state == LOOP_BLOCK){
     std::unique_lock<std::mutex> lck(mtx);
@@ -108,17 +75,19 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   // transfer samples from file buffer to output !
   for (uint32_t i = block_pos; i < nBufferFrames * fc.channels; i++) {   
     // loop in case we hit the file's end
-    if (spar->offset + i > fc.end_sample) {
-      if (spar->state == PLAY) {
-	spar->offset = fc.start_sample;
-      } else if (spar->state == PLAY_EVENT) {
-	spar->state = SILENCE;
-	spar->current_event->state = akita_play_event::FINISHED;
-	break;
-      }
+    if (spar->state == PLAY && spar->offset + i > fc.end_sample) {      
+      spar->offset = fc.start_sample;
+    } else if (spar->state == PLAY_EVENT && spar->current_event->samples_played >= spar->current_event->length_samples ) {
+      spar->state = SILENCE;
+      spar->current_event->state = akita_play_event::FINISHED;
+      break;
     }
+    
     // copy samples        
-    out_buf[i] = fc.file_buffer[spar->offset + i];    
+    out_buf[i] = fc.file_buffer[spar->offset + i];
+    if (spar->state == PLAY_EVENT){
+      spar->current_event->samples_played++;
+    }
   }
   
   // raw sample repetition vs channel-wise sample repetition ?
@@ -146,7 +115,7 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   // increament read offset
   spar->offset += ((float) (nBufferFrames - block_pos) * spar->offset_cut) / spar->sample_repeat;
   if((spar->state == LOOP) && (spar->offset >= spar->loop_end)){
-    spar->offset = spar->loop_start;
+    spar->offset = spar->loop_start.load();
   }
    
   return 0;
@@ -158,26 +127,9 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
 	   RtAudioStreamStatus status, void *userData) {
 
   filter_params *fpar = reinterpret_cast<filter_params*>(userData);
-  lfree::spsc_queue<filter_command_container>& cmd_queue = fpar->cmd_queue;
-
-  // handle commands
-  filter_command_container fcont;
-  while(cmd_queue.pop(&fcont)){
-    if(fcont.cmd == COMMAND::GAIN_CHANGE) {
-      fpar->gain = fcont.gain;
-    } else if (fcont.cmd == COMMAND::TOGGLE_REVERB) {
-      fpar->reverb = !fpar->reverb;
-    } else if (fcont.cmd == COMMAND::TOGGLE_FILTER) {
-      fpar->filter = !fpar->filter;
-    } else if (fcont.cmd == COMMAND::TOGGLE_MEAN_FILTER) {
-      fpar->mean_filter = !fpar->mean_filter;
-    }
-  }
-  
+    
   float* in_buf = (float *) inputBuffer;
   float* out_buf = (float *) outputBuffer;
-
-  //float current_sample = 0.0;
 
   long int frame_offset = 0;
   for (int i = 0; i < nBufferFrames; i++) {
@@ -195,11 +147,11 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       if (current_sample > 1.0) current_sample = 1.0;
     }  
     
-    if(fpar->mean_filter){
+    if(fpar->mean_filter_on){
       fpar->m_fbank.apply(0, current_sample);
     }
     
-    if (fpar->filter) {    
+    if (fpar->filterbank_on) {    
       fpar->fbank.apply(0, current_sample);      
     } 
 
@@ -207,13 +159,13 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       current_sample *= fpar->gain;
     }
     
-    fpar->frame_buffer[fpar->offset] = current_sample * (1.0 - fpar->ratio);
-    fpar->frame_buffer[fpar->offset + 1] = current_sample * fpar->ratio;
+    fpar->frame_buffer[fpar->pan_offset] = current_sample * (1.0 - fpar->pan_ratio);
+    fpar->frame_buffer[fpar->pan_offset + 1] = current_sample * fpar->pan_ratio;
 
-    if (fpar->reverb) {      
-      fpar->rev.tick(fpar->frame_buffer[fpar->offset], fpar->frame_buffer[fpar->offset + 1]);
-      fpar->frame_buffer[fpar->offset] = fpar->rev.lastOut(0);
-      fpar->frame_buffer[fpar->offset + 1] = fpar->rev.lastOut(1);
+    if (fpar->reverb_on) {      
+      fpar->rev.tick(fpar->frame_buffer[fpar->pan_offset], fpar->frame_buffer[fpar->pan_offset + 1]);
+      fpar->frame_buffer[fpar->pan_offset] = fpar->rev.lastOut(0);
+      fpar->frame_buffer[fpar->pan_offset + 1] = fpar->rev.lastOut(1);
     }
 
     for (int j = 0; j < fpar->channels; j++) {
@@ -261,7 +213,7 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("out-channels", po::value<int>(&opts.out_channels)->default_value(2), "Offset to control channels (esp. useful for mono playback)!")
     ("mean-filter", po::value<int>(&opts.mean_filter_points)->default_value(0), "Apply mean filter to shave the edge off a little!")
     //("mono", po::value<bool>(&opts.mono)->default_value(true), "Mixdown to mono!")
-    ("reverb", po::value<float>(&opts.reverb)->default_value(0.4), "Reverb level!")
+    ("reverb", po::value<float>(&opts.reverb_mix)->default_value(0.4), "Reverb level!")
     ("udp-port", po::value<int>(&opts.udp_port)->default_value(19456), "UDP Port for OSC mode!")    
     ;
   // ----- end options ... what kind of syntax is this ??
@@ -314,10 +266,49 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
 		  } 		  		  
 		});
 
+  
+  // message handlers 
+  st.add_method("/akita/param/reverb", "if",
+		[&spar, &fpar](lo_arg **argv, int count) {
+		  
+		});
+
+
+  // message handlers 
+  st.add_method("/akita/param/mean_filter", "ii",
+		[&spar, &fpar](lo_arg **argv, int count) {
+		  
+		});
+
+  // message handlers 
+  st.add_method("/akita/param/lowpass", "iff",
+		[&spar, &fpar](lo_arg **argv, int count) {
+		  
+		});
+
+  // message handlers 
+  st.add_method("/akita/param/flippiness", "f",
+		[&spar, &fpar](lo_arg **argv, int count) {
+		  
+		});
+
+  // message handlers 
+  st.add_method("/akita/param/fuzziness", "f",
+		[&spar, &fpar](lo_arg **argv, int count) {
+		  
+		});
+
+
+  // message handlers 
+  st.add_method("/akita/param/gain", "f",
+		[&spar, &fpar](lo_arg **argv, int count) {
+		  akita_actions::change_gain(spar, fpar, -0.05);
+		});
+
+
   // mutex and cv to block audio thread 
   std::mutex osc_mtx;
   std::condition_variable osc_cv;
-
   
   // message handlers 
   st.add_method("/akita/quit", "",
@@ -355,7 +346,7 @@ void handle_keyboard_input(source_params<READ_TYPE>& spar, filter_params& fpar )
       akita_actions::toggle_filter_band(spar, fpar, input);      
       break;
     case 'f':      
-      akita_actions::toggle_filter(spar, fpar);
+      akita_actions::toggle_filterbank(spar, fpar);
       break;
     case 'r':
       akita_actions::toggle_reverb(spar, fpar);
@@ -365,24 +356,24 @@ void handle_keyboard_input(source_params<READ_TYPE>& spar, filter_params& fpar )
       break;
     // gain control
     case 'd':           
-      akita_actions::change_gain(spar, fpar, 0.05);
+      akita_actions::change_gain(spar, fpar, fpar.gain + 0.05);
       break;
     case 'c':      
-      akita_actions::change_gain(spar, fpar, -0.05);
+      akita_actions::change_gain(spar, fpar, fpar.gain - 0.05);
       break;
       // fuzziness control
     case 'a':           
-      akita_actions::change_fuzziness(spar, fpar, 0.01);
+      akita_actions::change_fuzziness(spar, fpar, spar.fuzziness + 0.01);
       break;      
     case 'y':      
-      akita_actions::change_fuzziness(spar, fpar, -0.01);
+      akita_actions::change_fuzziness(spar, fpar, spar.fuzziness - 0.01);
       break;
       // samplerate control
     case 's':           
-      akita_actions::change_samplerate(spar, fpar, 1);
+      akita_actions::change_samplerate(spar, fpar, spar.sample_repeat + 1);
       break;
     case 'x':      
-      akita_actions::change_samplerate(spar, fpar, -1);
+      akita_actions::change_samplerate(spar, fpar, spar.sample_repeat - 1);
       break;
       // thread blocking control
     case 'm':      
@@ -426,7 +417,7 @@ int handle_audio(options_container& opts) {
   
   spar.fc.print_file_info();
   filter_params fpar(opts);
-  fpar.rev.setEffectMix(opts.reverb);
+  fpar.rev.setEffectMix(opts.reverb_mix);
   fpar.rev.setSampleRate(spar.fc.samplerate);
   
   std::cout << "Current Parameters:" << std::endl;
