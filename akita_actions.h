@@ -16,6 +16,27 @@ void change_gain (source_params<READ_TYPE>& spar, filter_params& fpar, float new
  }
 
 template <typename READ_TYPE>
+void change_reverb_mix (source_params<READ_TYPE>& spar, filter_params& fpar, float new_reverb_mix) {  
+  fpar.rev.setEffectMix(new_reverb_mix);
+  fpar.reverb_on = new_reverb_mix > 0.0;
+ }
+
+template <typename READ_TYPE>
+void change_lowpass (source_params<READ_TYPE>& spar, filter_params& fpar, float new_q, float new_freq) {  
+  fpar.lowpass.q = new_q;
+  fpar.lowpass.frequency = new_freq;
+  fpar.lowpass.update();
+  fpar.lowpass_on = new_freq < 20000;
+}
+
+template <typename READ_TYPE>
+void change_pan (source_params<READ_TYPE>& spar, filter_params& fpar, float new_pan) {  
+  if(new_pan < 0) { fpar.update_pan(fpar.channels); }
+  if(new_pan > fpar.channels) { fpar.update_pan(0.0); }
+  else { fpar.update_pan(new_pan); }
+}
+ 
+template <typename READ_TYPE>
 void change_flippiness (source_params<READ_TYPE>& spar, filter_params& fpar, float new_flippiness) {
   if (new_flippiness < 0) { fpar.flippiness = 0; }
   else if (new_flippiness > 1.0) { fpar.flippiness = 1.0; }

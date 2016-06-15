@@ -255,7 +255,30 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
     std::cout << "Can't start udp server." << std::endl;
     return;
   }
-   
+
+  // message handlers 
+  st.add_method("/akita/play", "fiffiffffif",
+		[&spar, &fpar](lo_arg **argv, int count) {
+		  akita_actions::change_gain(spar, fpar, argv[2]->f);
+		  akita_actions::change_reverb_mix(spar, fpar, argv[3]->f);
+		  fpar.mean_filter_on = argv[4]->i;
+		  akita_actions::change_lowpass(spar, fpar, argv[5]->f, argv[6]->f);
+		  akita_actions::change_flippiness(spar, fpar, argv[7]->f);
+		  akita_actions::change_fuzziness(spar, fpar, argv[8]->f);
+		  akita_actions::change_samplerate(spar, fpar, argv[9]->i);
+		  akita_actions::change_pan(spar, fpar, argv[10]->f);
+		  // otherwise, the event is still in progress
+		  if (!(spar.current_event != NULL && spar.current_event->state != akita_play_event::FINISHED)){
+		    std::cout << "RECIEVED EVENT !" << std::endl;		    
+		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->i));
+		    return 0;
+		  } else {
+		    std::cerr << "IGNORED EVENT !" << std::endl;
+		    return 0;
+		  } 		  		  
+		});
+
+  
   // message handlers 
   st.add_method("/akita/play", "fi",
 		[&spar](lo_arg **argv, int count) {
@@ -269,28 +292,23 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
 		    return 0;
 		  } 		  		  
 		});
-
   
   // message handlers 
-  st.add_method("/akita/param/reverb", "if",
-		[&spar, &fpar](lo_arg **argv, int count) {		  
-		  fpar.reverb_on = argv[0]->i;
-		  fpar.rev.setEffectMix(argv[1]->f);
+  st.add_method("/akita/param/reverb", "f",
+		[&spar, &fpar](lo_arg **argv, int count) {		  		  
+		  akita_actions::change_reverb_mix(spar, fpar, argv[0]->f);
 		});
 
   // message handlers 
-  st.add_method("/akita/param/mean_filter", "ii",
+  st.add_method("/akita/param/mean_filter", "i",
 		[&spar, &fpar](lo_arg **argv, int count) {
 		  fpar.mean_filter_on = argv[0]->i;
 		});
 
   // message handlers 
-  st.add_method("/akita/param/lowpass", "iff",
-		[&spar, &fpar](lo_arg **argv, int count) {
-		  fpar.lowpass_on = argv[0]->i;
-		  fpar.lowpass.q = argv[1]->f;
-		  fpar.lowpass.frequency = argv[2]->f;
-		  fpar.lowpass.update();
+  st.add_method("/akita/param/lowpass", "ff",
+		[&spar, &fpar](lo_arg **argv, int count) {		  
+		  akita_actions::change_lowpass(spar, fpar, argv[0]->f, argv[1]->f);
 		});
 
   // message handlers 
