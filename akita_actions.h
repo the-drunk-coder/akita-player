@@ -53,8 +53,8 @@ void change_fuzziness (source_params<READ_TYPE>& spar, filter_params& fpar, floa
  }
 
 template <typename READ_TYPE>
-void change_samplerate (source_params<READ_TYPE>& spar, filter_params& fpar, int new_samplerate) {
-  if (new_samplerate < 1) { spar.sample_repeat = 1; }  
+void change_samplerate (source_params<READ_TYPE>& spar, filter_params& fpar, float new_samplerate) {
+  if (new_samplerate <= 0) { spar.sample_repeat = 0.00000001; }  
   else { spar.sample_repeat = new_samplerate; }
   std::cout << "samplerate change, new samplerate: " << spar.sample_repeat << std::endl;    
  }

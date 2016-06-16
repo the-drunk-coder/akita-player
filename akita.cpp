@@ -73,30 +73,38 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   }
 
   // transfer samples from file buffer to output !
+  float file_buf_pos = block_pos;
   for (uint32_t i = block_pos; i < nBufferFrames * fc.channels; i++) {   
     // loop in case we hit the file's end
-    if (spar->state == PLAY && spar->offset + i > fc.end_sample) {      
+    if (spar->offset + (int) file_buf_pos > fc.end_sample) {      
       spar->offset = fc.start_sample;
-    } else if (spar->state == PLAY_EVENT && spar->current_event->samples_played >= spar->current_event->length_samples ) {
+    }
+
+    if (spar->state == PLAY_EVENT && spar->current_event->samples_played >= spar->current_event->length_samples ) {
       spar->state = SILENCE;
       spar->current_event->state = akita_play_event::FINISHED;
       break;
     }
     
     // copy samples        
-    out_buf[i] = fc.file_buffer[spar->offset + i];
+    
+    out_buf[i] = fc.file_buffer[spar->offset + (int) file_buf_pos];
+    file_buf_pos += 1.0 / spar->sample_repeat;
+    
     if (spar->state == PLAY_EVENT){
       spar->current_event->samples_played++;
-    }
+    } 
   }
   
   // raw sample repetition vs channel-wise sample repetition ?
   // sample repetition
-  for (uint32_t i = block_pos; i < (nBufferFrames * fc.channels) / spar->sample_repeat; i++) {
-    for(int j = 0; j < spar->sample_repeat; j++){
-      out_buf[i+j] = out_buf[i];
+  if (spar->sample_repeat > 1) {
+    for (uint32_t i = block_pos; i < (nBufferFrames * fc.channels) / spar->sample_repeat; i++) {  
+      for(int j = 0; j < spar->sample_repeat; j++){
+	out_buf[i+j] = out_buf[i];
+      }
     }
-  }
+  }   
   
   // buffercutting
   for (uint32_t i = nBufferFrames * spar->buffer_cut; i < nBufferFrames * fc.channels; i++) {           
@@ -257,7 +265,7 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
   }
 
   // message handlers 
-  st.add_method("/akita/play", "fiffiffffif",
+  st.add_method("/akita/play", "fiffiffffff",
 		[&spar, &fpar](lo_arg **argv, int count) {
 		  akita_actions::change_gain(spar, fpar, argv[2]->f);
 		  akita_actions::change_reverb_mix(spar, fpar, argv[3]->f);
@@ -265,18 +273,36 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
 		  akita_actions::change_lowpass(spar, fpar, argv[5]->f, argv[6]->f);
 		  akita_actions::change_flippiness(spar, fpar, argv[7]->f);
 		  akita_actions::change_fuzziness(spar, fpar, argv[8]->f);
-		  akita_actions::change_samplerate(spar, fpar, argv[9]->i);
+		  akita_actions::change_samplerate(spar, fpar, argv[9]->f);
 		  akita_actions::change_pan(spar, fpar, argv[10]->f);
 		  // otherwise, the event is still in progress
 		  if (!(spar.current_event != NULL && spar.current_event->state != akita_play_event::FINISHED)){
-		    std::cout << "RECIEVED EVENT !" << std::endl;		    
+		    std::cout << "A K I T A - RECIEVED play EVENT !" << std::endl;		    
 		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->i));
 		    return 0;
 		  } else {
-		    std::cerr << "IGNORED EVENT !" << std::endl;
+		    std::cerr << "A K I T A - IGNORED play EVENT !" << std::endl;
 		    return 0;
 		  } 		  		  
 		});
+
+  // message handlers 
+  st.add_method("/akita/param", "ffiffffff",
+		[&spar, &fpar](lo_arg **argv, int count) {
+
+		  std::cout << "A K I T A - RECIEVED param EVENT !" << std::endl;
+		  
+		  akita_actions::change_gain(spar, fpar, argv[0]->f);
+		  akita_actions::change_reverb_mix(spar, fpar, argv[1]->f);
+		  fpar.mean_filter_on = argv[2]->i;
+		  akita_actions::change_lowpass(spar, fpar, argv[3]->f, argv[4]->f);
+		  akita_actions::change_flippiness(spar, fpar, argv[5]->f);
+		  akita_actions::change_fuzziness(spar, fpar, argv[6]->f);
+		  akita_actions::change_samplerate(spar, fpar, argv[7]->f);
+		  akita_actions::change_pan(spar, fpar, argv[8]->f);
+		  // otherwise, the event is still in progress		  		  		   		  		  
+		});
+
 
   
   // message handlers 
