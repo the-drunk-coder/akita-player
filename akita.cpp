@@ -609,7 +609,7 @@ std::map<init_key, audio_handler> handlers {
  */
 int main(int ac, char *av[]) {
   // Salutations!
-  std::cout << "\n~~ akita - create noise abusing low-level audio parameters! ~~\n" << std::endl;
+  std::cout << "\n A K I T A - create noise abusing low-level audio parameters! \n" << std::endl;
 
   options_container opts;
   
