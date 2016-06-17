@@ -73,11 +73,12 @@ int source_callback(void *outputBuffer, void *inputBuffer,
   }
 
   // transfer samples from file buffer to output !
-  float file_buf_pos = block_pos;
+  float file_buf_pos = 0;
   for (uint32_t i = block_pos; i < nBufferFrames * fc.channels; i++) {   
     // loop in case we hit the file's end
     if (spar->offset + (int) file_buf_pos > fc.end_sample) {      
       spar->offset = fc.start_sample;
+      file_buf_pos = 0;
     }
 
     if (spar->state == PLAY_EVENT && spar->current_event->samples_played >= spar->current_event->length_samples ) {
@@ -88,15 +89,14 @@ int source_callback(void *outputBuffer, void *inputBuffer,
     
     // copy samples        
     
-    out_buf[i] = fc.file_buffer[spar->offset + (int) file_buf_pos];
-    file_buf_pos += 1.0 / spar->sample_repeat;
+    out_buf[i] = fc.file_buffer[spar->offset + (int) file_buf_pos];    
+    file_buf_pos += 1.0 / spar->samplerate_mod;
     
     if (spar->state == PLAY_EVENT){
       spar->current_event->samples_played++;
     } 
   }
-  
-  // raw sample repetition vs channel-wise sample repetition ?
+
   // sample repetition
   if (spar->sample_repeat > 1) {
     for (uint32_t i = block_pos; i < (nBufferFrames * fc.channels) / spar->sample_repeat; i++) {  
@@ -104,7 +104,7 @@ int source_callback(void *outputBuffer, void *inputBuffer,
 	out_buf[i+j] = out_buf[i];
       }
     }
-  }   
+  } 
   
   // buffercutting
   for (uint32_t i = nBufferFrames * spar->buffer_cut; i < nBufferFrames * fc.channels; i++) {           
@@ -213,7 +213,8 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("init-gain", po::value<float>(&opts.initial_gain)->default_value(0.5), "Initial gain (default: 0.5)!")
     ("start", po::value<float>(&opts.start)->default_value(0.0), "Starting point within the sample, relative to length!")
     ("end", po::value<float>(&opts.end)->default_value(1.0), "End point within the sample, relative to length!")
-    ("sample-repeat", po::value<float>(&opts.sample_repeat)->default_value(1), "Repeat every sample n times!")
+    ("samplerate-mod", po::value<float>(&opts.samplerate_mod)->default_value(1), "Modifiy samplerate!")
+    ("sample-repeat", po::value<int>(&opts.sample_repeat)->default_value(1), "Repeat every sample n times!")
     ("buffer-cut", po::value<float>(&opts.buffer_cut)->default_value(2), "Don't fill source output buffer completely!")
     ("offset-mod", po::value<float>(&opts.offset_cut)->default_value(2), "Modify offset increment (chunk size read from buffer)!")
     ("fuzziness", po::value<float>(&opts.fuzziness)->default_value(0.0), "Create fuzziness by removing random samples with a certain probability!")
@@ -265,20 +266,23 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
   }
 
   // message handlers 
-  st.add_method("/akita/play", "fiffiffffff",
-		[&spar, &fpar](lo_arg **argv, int count) {
+  st.add_method("/akita/play", "fiffiffffiff",
+		[&spar, &fpar, &opts](lo_arg **argv, int count) {
 		  akita_actions::change_gain(spar, fpar, argv[2]->f);
 		  akita_actions::change_reverb_mix(spar, fpar, argv[3]->f);
 		  fpar.mean_filter_on = argv[4]->i;
 		  akita_actions::change_lowpass(spar, fpar, argv[5]->f, argv[6]->f);
 		  akita_actions::change_flippiness(spar, fpar, argv[7]->f);
-		  akita_actions::change_fuzziness(spar, fpar, argv[8]->f);
-		  akita_actions::change_samplerate(spar, fpar, argv[9]->f);
+		  akita_actions::change_fuzziness(spar, fpar, argv[8]->f);		  
 		  akita_actions::change_pan(spar, fpar, argv[10]->f);
+
 		  // otherwise, the event is still in progress
 		  if (!(spar.current_event != NULL && spar.current_event->state != akita_play_event::FINISHED)){
-		    std::cout << "A K I T A - RECIEVED play EVENT !" << std::endl;		    
+		    std::cout << "A K I T A - instance at " << opts.udp_port << " RECIEVED play EVENT ! ";		    
 		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->i));
+		    
+		    akita_actions::change_samplerate_mod(spar, fpar, argv[11]->f);
+		    akita_actions::change_sample_repeat(spar, fpar, argv[9]->i);
 		    return 0;
 		  } else {
 		    std::cerr << "A K I T A - IGNORED play EVENT !" << std::endl;
@@ -287,7 +291,7 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
 		});
 
   // message handlers 
-  st.add_method("/akita/param", "ffiffffff",
+  st.add_method("/akita/param", "ffiffffiff",
 		[&spar, &fpar](lo_arg **argv, int count) {
 
 		  std::cout << "A K I T A - RECIEVED param EVENT !" << std::endl;
@@ -298,12 +302,10 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
 		  akita_actions::change_lowpass(spar, fpar, argv[3]->f, argv[4]->f);
 		  akita_actions::change_flippiness(spar, fpar, argv[5]->f);
 		  akita_actions::change_fuzziness(spar, fpar, argv[6]->f);
-		  akita_actions::change_samplerate(spar, fpar, argv[7]->f);
+		  akita_actions::change_sample_repeat(spar, fpar, argv[7]->i);
 		  akita_actions::change_pan(spar, fpar, argv[8]->f);
-		  // otherwise, the event is still in progress		  		  		   		  		  
+		  akita_actions::change_samplerate_mod(spar, fpar, argv[9]->f); 		  		   		  		  
 		});
-
-
   
   // message handlers 
   st.add_method("/akita/play", "fi",
@@ -421,10 +423,10 @@ void handle_keyboard_input(source_params<READ_TYPE>& spar, filter_params& fpar )
       break;
       // samplerate control
     case 's':           
-      akita_actions::change_samplerate(spar, fpar, spar.sample_repeat + 1);
+      akita_actions::change_sample_repeat(spar, fpar, spar.sample_repeat + 1);
       break;
     case 'x':      
-      akita_actions::change_samplerate(spar, fpar, spar.sample_repeat - 1);
+      akita_actions::change_sample_repeat(spar, fpar, spar.sample_repeat - 1);
       break;
       // thread blocking control
     case 'm':      

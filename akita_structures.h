@@ -262,7 +262,8 @@ struct options_container {
   // buffer glitch parameters
   float buffer_cut;
   float offset_cut;
-  float sample_repeat;
+  int sample_repeat;
+  float samplerate_mod;
   float flip_prob;
   // kill samples to make it all fuzzy !
   float fuzziness;
@@ -310,7 +311,8 @@ struct source_params {
   // buffer glitch parameters
   std::atomic<float> buffer_cut;
   std::atomic<float> offset_cut;
-  std::atomic<float> sample_repeat;
+  std::atomic<int> sample_repeat;
+  std::atomic<float> samplerate_mod;
 
   std::atomic<float> fuzziness;
   
@@ -330,6 +332,7 @@ struct source_params {
     
     state = opts.initial_state;
     sample_repeat = opts.sample_repeat;
+    samplerate_mod = opts.samplerate_mod;
     fuzziness = opts.fuzziness;
         
     // set starting point
