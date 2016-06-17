@@ -278,7 +278,7 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
 
 		  // otherwise, the event is still in progress
 		  if (!(spar.current_event != NULL && spar.current_event->state != akita_play_event::FINISHED)){
-		    std::cout << "A K I T A - instance at " << opts.udp_port << " RECIEVED play EVENT ! ";		    
+		    std::cout << "A K I T A - instance at " << opts.udp_port << " RECIEVED play EVENT ! " << std::endl;		    
 		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->i));
 		    
 		    akita_actions::change_samplerate_mod(spar, fpar, argv[11]->f);
