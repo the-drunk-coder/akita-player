@@ -11,8 +11,7 @@ template <typename READ_TYPE>
 void change_gain (source_params<READ_TYPE>& spar, filter_params& fpar, float new_gain) {  
   if (new_gain < 0) { fpar.gain = 0; }
   else if (new_gain > 1.0) { fpar.gain = 1.0; }
-  else { fpar.gain = new_gain; }
-  std::cout << "gain change, new gain: " << fpar.gain << std::endl;
+  else { fpar.gain = new_gain; }  
  }
 
 template <typename READ_TYPE>
@@ -23,6 +22,9 @@ void change_reverb_mix (source_params<READ_TYPE>& spar, filter_params& fpar, flo
 
 template <typename READ_TYPE>
 void change_lowpass (source_params<READ_TYPE>& spar, filter_params& fpar, float new_q, float new_freq) {  
+  if(new_q < 1) { new_q = 1; }
+  if(new_freq < 1) { new_freq = 1; }
+  if(new_freq > 20000) { new_freq = 20000; }
   fpar.lowpass.q = new_q;
   fpar.lowpass.frequency = new_freq;
   fpar.lowpass.update();
@@ -41,7 +43,6 @@ void change_flippiness (source_params<READ_TYPE>& spar, filter_params& fpar, flo
   if (new_flippiness < 0) { fpar.flippiness = 0; }
   else if (new_flippiness > 1.0) { fpar.flippiness = 1.0; }
   else { fpar.flippiness = new_flippiness; }
-  std::cout << "flippiness change, new flippiness: " << fpar.flippiness << std::endl;  
  }
 
 template <typename READ_TYPE>
@@ -49,38 +50,38 @@ void change_fuzziness (source_params<READ_TYPE>& spar, filter_params& fpar, floa
   if (new_fuzziness < 0) { spar.fuzziness = 0; }
   else if (new_fuzziness > 1.0) { spar.fuzziness = 1.0; }
   else { spar.fuzziness = new_fuzziness; }
-  std::cout << "fuzziness change, new fuzziness: " << spar.fuzziness << std::endl;    
  }
 
 template <typename READ_TYPE>
-void change_samplerate (source_params<READ_TYPE>& spar, filter_params& fpar, float new_samplerate) {
-  if (new_samplerate <= 0) { spar.sample_repeat = 0.00000001; }  
-  else { spar.sample_repeat = new_samplerate; }
-  std::cout << "samplerate change, new samplerate: " << spar.sample_repeat << std::endl;    
+void change_sample_repeat (source_params<READ_TYPE>& spar, filter_params& fpar, int new_sample_repeat) {
+  if (new_sample_repeat < 1) { spar.sample_repeat = 1; }  
+  else { spar.sample_repeat = new_sample_repeat; }  
  }
- 
+
+template <typename READ_TYPE>
+void change_samplerate_mod (source_params<READ_TYPE>& spar, filter_params& fpar, float new_samplerate_mod) {
+  if (new_samplerate_mod <= 0.1) { spar.samplerate_mod = 0.1; }  
+  else { spar.samplerate_mod = new_samplerate_mod; }
+ }
+
 template <typename READ_TYPE>
 void toggle_filterbank (source_params<READ_TYPE>& spar, filter_params& fpar) {
   fpar.filterbank_on = ! fpar.filterbank_on;
-  std::cout << "filter toggled, now: " << !fpar.filterbank_on << std::endl;
  }
 
 template <typename READ_TYPE>
 void toggle_reverb (source_params<READ_TYPE>& spar, filter_params& fpar) {
   fpar.reverb_on = !fpar.reverb_on;
-  std::cout << "reverb toggled, now: " << !fpar.reverb_on << std::endl;
  }
 
 template <typename READ_TYPE>
 void toggle_mean_filter (source_params<READ_TYPE>& spar, filter_params& fpar) {
   fpar.mean_filter_on = !fpar.mean_filter_on;
-  std::cout << "mean filter toggled, now: " << !fpar.mean_filter_on << std::endl;  
  }
 
 template <typename READ_TYPE>
 void toggle_lowpass_filter (source_params<READ_TYPE>& spar, filter_params& fpar) {
   fpar.lowpass_on = !fpar.lowpass_on;
-  std::cout << "lowpass filter toggled, now: " << !fpar.mean_filter_on << std::endl;  
  }
 
 template <typename READ_TYPE>
@@ -94,7 +95,6 @@ void toggle_mute (source_params<READ_TYPE>& spar, filter_params& fpar) {
   } else if (spar.state == LOOP_SILENCE) {
     spar.state = LOOP;
   }
-  std::cout << "mute toggled, now: " << spar.state << std::endl;
  }
  
 template <typename READ_TYPE>
