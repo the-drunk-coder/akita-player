@@ -223,7 +223,7 @@ po::options_description init_opts(int ac, char *av[], po::variables_map& vm,
     ("write-type", po::value<RWTYPES>(&opts.write_type)->default_value(SHORT), "Type used to write to audio buffer!")
     ("stream-type", po::value<RWTYPES>(&opts.stream_type)->default_value(SHORT), "Type used for the audio stream!")
     ("pan", po::value<float>(&opts.pan)->default_value(0.5), "pan!")
-    ("out-channels", po::value<int>(&opts.out_channels)->default_value(2), "Offset to control channels (esp. useful for mono playback)!")
+    ("out-channels", po::value<int>(&opts.out_channels)->default_value(2), "Number of output channels!")
     ("mean-filter", po::value<int>(&opts.mean_filter_points)->default_value(0), "Apply mean filter to shave the edge off a little!")
     //("mono", po::value<bool>(&opts.mono)->default_value(true), "Mixdown to mono!")
     ("reverb", po::value<float>(&opts.reverb_mix)->default_value(0.4), "Reverb level!")
