@@ -59,29 +59,30 @@ void canonical_sos_filter::update () {
   del2 = 0;
   
   k = tanh( (M_PI * frequency) / samplerate);
-
-  a1 = (2.0 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
-  a2 = ((pow(k,2) * q) - k + q) / ((pow(k,2) * q) + k + q);
+  double k_pow_two = pow(k,2);
+  
+  a1 = (2.0 * q * (k_pow_two - 1)) / ((k_pow_two * q) + k + q);
+  a2 = ((k_pow_two * q) - k + q) / ((k_pow_two * q) + k + q);
 
   if (mode == LP){
-    b0 = (pow(k,2) * q) / ((pow(k,2) * q) + k + q);
-    b1 = (2.0 * pow(k,2) * q) / ((pow(k,2) * q) + k + q);
+    b0 = (k_pow_two * q) / ((k_pow_two * q) + k + q);
+    b1 = (2.0 * k_pow_two * q) / ((k_pow_two * q) + k + q);
     b2 = b0;      
   } else if (mode == HP){
-    b0 = q / ((pow(k,2) * q) + k + q);
-    b1 = -1.0 * ((2.0 * q) / ((pow(k,2) * q) + k + q));
+    b0 = q / ((k_pow_two * q) + k + q);
+    b1 = -1.0 * ((2.0 * q) / ((k_pow_two * q) + k + q));
     b2 = b0;      
   } else if (mode == BP){
-    b0 = k / ((pow(k,2) * q) + k + q);
-    b1 = 0;
+    b0 = k / ((k_pow_two * q) + k + q);
+    b1 = 0.0;
     b2 = -1.0 * b0;      
   } else if (mode == NOTCH){
-    b0 = (q * (1.0 + pow(k,2))) / ((pow(k,2) * q) + k + q);
-    b1 = (2 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
+    b0 = (q * (1.0 + k_pow_two)) / ((k_pow_two * q) + k + q);
+    b1 = (2 * q * (k_pow_two - 1)) / ((k_pow_two * q) + k + q);
     b2 = b0;      
   } else if (mode == AP){
-    b0 = ((pow(k,2) * q) - k + q) / ((pow(k,2) * q) + k + q);
-    b1 = (2 * q * (pow(k,2) - 1)) / ((pow(k,2) * q) + k + q);
+    b0 = ((k_pow_two * q) - k + q) / ((k_pow_two * q) + k + q);
+    b1 = (2 * q * (k_pow_two - 1)) / ((k_pow_two * q) + k + q);
     b2 = 1.0;        
   }
 }
