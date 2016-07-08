@@ -10,6 +10,8 @@
 #include <stk/FreeVerb.h>
 #include <memory>
 #include <atomic>
+#include <cmath>
+
 
 // format enum
 enum INTERFACE {PLAIN, ADVANCED, OSC};
@@ -117,23 +119,81 @@ std::istream &operator>>(std::istream &in, PMODE &pmode) {
 struct akita_play_event {
   enum STATE { NEW, IN_PROGRESS, FINISHED };
 
-  STATE state = NEW;
-    
-  float start;
-  int dur;
-  int length_samples;
+  STATE state = FINISHED;
+  
+  float start = 0.0;
+  int length_samples = 0;
   int samples_played = 0;
+
+  akita_play_event() = default;
   
-  akita_play_event () {
-    start = 0.0;
-    dur = 0;
-    state = FINISHED;
-  }
-  
-  akita_play_event (float start, int dur) {
+  akita_play_event (float start, int dur, int samplerate, int channels) {
     this->start = start;
-    this->dur = dur;
+    this->length_samples = (((samplerate / 1000) * dur) * channels);
+    state = NEW;
   }
+};
+
+struct akita_envelope {
+  enum STATE { SILENCE, FADE_IN, FADE_OUT, SUSTAIN };
+
+  STATE state = SILENCE; 
+
+  int length_samples = 0;
+  int fade_in_samples = 0;
+  int fade_out_samples = 0;
+
+  int fade_in_samples_played = 0;
+  int fade_out_samples_played = 0;
+  int samples_played = 0;
+
+  float fade_in_pi_chunk = 0.0;
+  float fade_out_pi_chunk = 0.0;
+
+  akita_envelope() = default;
+  
+  akita_envelope (int dur, int fade_in, int fade_out, int samplerate, int channels) {
+    this->length_samples = ((samplerate / 1000) * dur) * channels;
+    this->fade_in_samples = ((samplerate / 1000) * fade_in) * channels;
+    this->fade_out_samples = ((samplerate / 1000) * fade_out) * channels;
+    
+    fade_in_pi_chunk = (M_PI / 2) / fade_in_samples;
+    fade_out_pi_chunk = (M_PI / 2) / fade_out_samples;
+
+    state = FADE_IN;
+  }
+
+  float tick(float gain) {
+    float cur_gain = 0.0;
+    if(state == FADE_IN){
+      if(fade_in_samples_played < fade_in_samples){
+	cur_gain = gain * sin(fade_in_pi_chunk * fade_in_samples_played++);	
+      } else {
+	state = SUSTAIN;
+	cur_gain = gain;
+	//std::cout << " STATE CHANGE " << state << " " << cur_gain << std::endl;
+      }      
+    } else if (state == FADE_OUT) {
+      if(fade_out_samples_played < fade_out_samples){
+	cur_gain = gain * (1.0 - sin(fade_out_pi_chunk * fade_out_samples_played++));	
+      } else {
+	state = SILENCE;
+	//std::cout << " STATE CHANGE " << state << " " << cur_gain << std::endl;
+      }      
+    } else if (state == SUSTAIN) {
+      if(samples_played >= length_samples - fade_out_samples){
+	state = FADE_OUT;
+	cur_gain = gain; 
+	//std::cout << " STATE CHANGE " << state << " " << cur_gain << std::endl;
+      } else {     
+	cur_gain = gain;
+      }
+    } 
+
+    samples_played++;
+      
+    return cur_gain;
+  } 
 };
 
 
@@ -212,13 +272,12 @@ struct file_container {
     state = READY;    
   }
 
-  void update_range (akita_play_event& ev) {
+  void update_range (const akita_play_event& ev) {
     start_sample = (frames * ev.start) * channels;
-    end_sample = start_sample + (((samplerate / 1000) * ev.dur) * channels);
+    end_sample = start_sample + ev.length_samples;
     if(end_sample >= frames){
       end_sample = frames;
-    }
-    ev.length_samples = end_sample - start_sample;
+    }    
   }
   
   ~file_container() {
@@ -315,6 +374,9 @@ struct source_params {
   std::atomic<float> samplerate_mod;
 
   std::atomic<float> fuzziness;
+
+  std::atomic<float> fade_step;
+  
   
   source_params(options_container& opts) :     
      fc(opts.filename, opts.start, opts.end, opts.mono),     
@@ -329,6 +391,7 @@ struct source_params {
     loop_start = 0;
     loop_start = 0;
     offset = 0;
+    
     
     state = opts.initial_state;
     sample_repeat = opts.sample_repeat;
@@ -362,18 +425,23 @@ struct filter_params {
   filterbank fbank; 
   mean_filterbank m_fbank;
   canonical_sos_filter lowpass;
+  canonical_sos_filter hipass;
+  peak_filter peak;
   stk::FreeVerb rev;
   
   PMODE mode;
   int channels;
+
+  std::unique_ptr<akita_envelope> envelope;
   
   std::atomic<float> gain;
   
   std::atomic<bool> lowpass_on;
+  std::atomic<bool> hipass_on;
+  std::atomic<bool> peak_on;
   std::atomic<bool> filterbank_on;
   std::atomic<bool> mean_filter_on;
   std::atomic<bool> reverb_on;
-  
   std::atomic<float> flippiness;
 
   // pan
@@ -390,10 +458,15 @@ struct filter_params {
   filter_params (options_container& opts) :
     fbank(opts.out_channels, opts.samplerate, 100, 8000, 10),
     m_fbank(opts.out_channels, 5),
-    lowpass()
+    lowpass(canonical_sos_filter::LP),
+    hipass(canonical_sos_filter::HP),
+    peak(),
+    envelope(new akita_envelope())  
   {
 
     lowpass_on = false;
+    hipass_on = false;
+    peak_on = false;
     filterbank_on = false;
     reverb_on = false;
     mean_filter_on = false;

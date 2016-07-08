@@ -35,18 +35,37 @@ canonical_sos_filter::canonical_sos_filter () {
   this->mode = LP;
   this->q = 2;
   this->samplerate = 44100;
+  this->gain = 0.0;
   update();
 }
 
-canonical_sos_filter::canonical_sos_filter (float frequency, float q, int samplerate, FMODE mode) {
+//canonicalsos filter methods
+canonical_sos_filter::canonical_sos_filter (FMODE mode) {
+  if(mode == LP){
+    this->frequency = 5000;
+  } else if(mode == HP){
+    this->frequency = 50;
+  } else {
+    this->frequency = 2000;
+  }
+  this->mode = mode;
+  this->q = 1;
+  this->samplerate = 44100;
+  this->gain = 0.0;
+  update();
+}
+
+
+canonical_sos_filter::canonical_sos_filter (float frequency, float q, float gain, int samplerate, FMODE mode) {
   this->frequency = frequency;
   this->mode = mode;
   this->q = q;
   this->samplerate = samplerate;
+  this->gain = gain;
   update();
 }
 
-void canonical_sos_filter::update (float frequency, float q, int samplerate, FMODE mode){
+void canonical_sos_filter::update (float frequency, float q, float gain, int samplerate, FMODE mode){
   this->frequency = frequency;
   this->mode = mode;
   this->q = q;
@@ -60,7 +79,7 @@ void canonical_sos_filter::update () {
   
   k = tanh( (M_PI * frequency) / samplerate);
   double k_pow_two = pow(k,2);
-  
+
   a1 = (2.0 * q * (k_pow_two - 1)) / ((k_pow_two * q) + k + q);
   a2 = ((k_pow_two * q) - k + q) / ((k_pow_two * q) + k + q);
 
@@ -84,20 +103,71 @@ void canonical_sos_filter::update () {
     b0 = ((k_pow_two * q) - k + q) / ((k_pow_two * q) + k + q);
     b1 = (2 * q * (k_pow_two - 1)) / ((k_pow_two * q) + k + q);
     b2 = 1.0;        
-  }
+  } 
 }
 
 float canonical_sos_filter::calculate (float sample) {
   float intermediate = sample + ((-1.0 * a1) * del1) + ((-1.0 * a2) * del2);
   float out = (b0 * intermediate) + (b1 * del1) + (b2 * del2);
   del2 = del1;
-  del1 = intermediate;
+  del1 = intermediate;  
   return out;
 }
 
 void canonical_sos_filter::process(float& sample){
   sample = calculate(sample);          
 }
+
+
+peak_filter::peak_filter(){
+  this->samplerate = 44100;
+  this->frequency = 1000;
+  this->bandwidth = 100;
+  this->gain = 0.0;
+  this->del1 = 0;
+  this->del2 = 0;
+  update();
+}
+
+void peak_filter::update(){
+  float w_c = (2 * frequency) / samplerate;
+  float w_b = (2 * bandwidth) / samplerate;
+  
+  d = -cosf(M_PI * w_c);
+
+  v_zero = pow(10, gain/20);
+  h_zero = v_zero - 1;
+
+  float cf_tan = tan(M_PI * w_b / 2);
+  
+  if(gain >= 0){
+    c = (cf_tan - 1) / (cf_tan + 1); 
+  } else {
+    c = (cf_tan - v_zero) / (cf_tan + v_zero);
+  }
+}
+
+void peak_filter::update(float frequency, float gain, float bandwidth){
+  this->frequency = frequency;
+  this->bandwidth = bandwidth;
+  this->gain = gain;
+  update();
+}
+
+float peak_filter::calculate(float sample){
+  float x_h = sample - d * (1 - c) * del1 + (c * del2);
+  float y_1 = (-1.0 * c * x_h) + (d * (1-c) * del1) + del2;
+  float out = 0.5 * h_zero * (sample - y_1) + sample;
+  del2 = del1;
+  del1 = x_h;
+  return out;
+}
+
+void peak_filter::process(float& sample){
+  sample = calculate(sample);
+}
+
+
 
 simple_mean_filter::simple_mean_filter(int points){
   init(points);
@@ -192,11 +262,11 @@ filterbank::filterbank(int channels, int samplerate, float lowcut, float hicut, 
   fbank = new canonical_sos_filter[channels * bands];
   
   for(int ch = 0; ch < channels; ch++) {
-    fbank[ch * bands].update(lowcut, 1.5, samplerate, canonical_sos_filter::HP);
+    fbank[ch * bands].update(lowcut, 1.5, 0.0, samplerate, canonical_sos_filter::HP);
     for(int b = 1; b < bands-1; b++) {
-      fbank[(ch * bands) + b].update(lowcut + (b * ((hicut - lowcut) / bands)) , 1.5, samplerate, canonical_sos_filter::NOTCH);
+      fbank[(ch * bands) + b].update(lowcut + (b * ((hicut - lowcut) / bands)) , 1.5, 0.0, samplerate, canonical_sos_filter::NOTCH);
     }
-    fbank[(ch * bands) + bands-1].update(hicut, 1.5, samplerate, canonical_sos_filter::LP);
+    fbank[(ch * bands) + bands-1].update(hicut, 1.5, 0.0, samplerate, canonical_sos_filter::LP);
   }
 
   fmask = new bool[bands];

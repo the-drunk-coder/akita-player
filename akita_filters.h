@@ -13,6 +13,33 @@ union float_conv {
 
 float random_flip(float sample, float prob);
 
+struct peak_filter {
+
+  float frequency;
+  float bandwidth;
+  float gain;
+  float samplerate;
+  
+  // parameters needed for peak filtering 
+  float h_zero;
+  float v_zero;
+  float d;
+
+  // delay samples
+  float del1, del2;
+
+  // boost/cut factor
+  float c;
+  
+  peak_filter();
+
+  void update();
+  void update(float frequency, float gain, float bandwith);
+
+  float calculate(float sample);
+  void process(float& sample);
+};
+
 /*
  * Filter and filterbank
  */
@@ -21,22 +48,24 @@ struct canonical_sos_filter {
 
   float frequency;
   float q;
+  float gain;
   FMODE mode;
   int samplerate;
   
   float a1, a2;
   float b0, b1, b2;
   float k;  
-
+  
   float del1, del2; 
+
   
   canonical_sos_filter();
-  
-  canonical_sos_filter (float frequency, float q, int samplerate, FMODE mode);
+  canonical_sos_filter (FMODE mode);
+  canonical_sos_filter (float frequency, float q, float gain, int samplerate, FMODE mode);
 
   // update filter parameters
   void update ();
-  void update (float frequency, float q, int samplerate, FMODE mode);
+  void update (float frequency, float q, float gain, int samplerate, FMODE mode);
   
   // calculate filtered sample
   float calculate (float sample);

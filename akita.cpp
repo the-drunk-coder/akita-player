@@ -163,13 +163,22 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       fpar->fbank.apply(0, current_sample);      
     }
 
+    if (fpar->hipass_on) {    
+      fpar->hipass.process(current_sample);      
+    }
+
+    if (fpar->peak_on) {    
+      fpar->peak.process(current_sample);      
+    }
+    
     if (fpar->lowpass_on) {    
       fpar->lowpass.process(current_sample);      
     }
-    
+
     if(fpar->mode == PMODE::MILD){
-      current_sample *= fpar->gain;
+      current_sample *= fpar->envelope->tick(fpar->gain);      
     }
+    
     
     fpar->frame_buffer[fpar->pan_offset] = current_sample * (1.0 - fpar->pan_ratio);
     fpar->frame_buffer[fpar->pan_offset + 1] = current_sample * fpar->pan_ratio;
@@ -266,23 +275,30 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
   }
 
   // message handlers 
-  st.add_method("/akita/play", "fiffiffffiff",
+  st.add_method("/akita/play", "fiiiffiffffifffffff",
 		[&spar, &fpar, &opts](lo_arg **argv, int count) {
-		  akita_actions::change_gain(spar, fpar, argv[2]->f);
-		  akita_actions::change_reverb_mix(spar, fpar, argv[3]->f);
-		  fpar.mean_filter_on = argv[4]->i;
-		  akita_actions::change_lowpass(spar, fpar, argv[5]->f, argv[6]->f);
-		  akita_actions::change_flippiness(spar, fpar, argv[7]->f);
-		  akita_actions::change_fuzziness(spar, fpar, argv[8]->f);		  
-		  akita_actions::change_pan(spar, fpar, argv[10]->f);
-
+		  akita_actions::change_gain(spar, fpar, argv[4]->f);
+		  akita_actions::change_reverb_mix(spar, fpar, argv[5]->f);
+		  fpar.mean_filter_on = argv[6]->i;
+		  akita_actions::change_lowpass(spar, fpar, argv[7]->f, argv[8]->f);
+		  akita_actions::change_flippiness(spar, fpar, argv[9]->f);
+		  akita_actions::change_fuzziness(spar, fpar, argv[10]->f);		  
+		  akita_actions::change_pan(spar, fpar, argv[12]->f);
+		  akita_actions::change_peak(spar, fpar, argv[14]->f, argv[15]->f, argv[16]->f);
+		  akita_actions::change_hipass(spar, fpar, argv[17]->f, argv[18]->f);
+		  
 		  // otherwise, the event is still in progress
 		  if (!(spar.current_event != NULL && spar.current_event->state != akita_play_event::FINISHED)){
 		    std::cout << "A K I T A - instance at " << opts.udp_port << " RECIEVED play EVENT ! " << std::endl;		    
-		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->i));
+		    if (argv[1]->i < argv[2]->i + argv[3]->i ){
+		      std::cerr << "A K I T A - IGNORED play EVENT, envelope invalid !" << std::endl;
+		      return 0;
+		    }
+		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->i, spar.fc.samplerate, spar.fc.channels));
+		    fpar.envelope.reset(new akita_envelope(argv[1]->i, argv[2]->i, argv[3]->i, spar.fc.samplerate, spar.fc.channels));
 		    
-		    akita_actions::change_samplerate_mod(spar, fpar, argv[11]->f);
-		    akita_actions::change_sample_repeat(spar, fpar, argv[9]->i);
+		    akita_actions::change_samplerate_mod(spar, fpar, argv[13]->f);
+		    akita_actions::change_sample_repeat(spar, fpar, argv[11]->i);
 		    return 0;
 		  } else {
 		    std::cerr << "A K I T A - IGNORED play EVENT !" << std::endl;
@@ -291,7 +307,7 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
 		});
 
   // message handlers 
-  st.add_method("/akita/param", "ffiffffiff",
+  st.add_method("/akita/param", "ffiffffifffffff",
 		[&spar, &fpar](lo_arg **argv, int count) {
 
 		  std::cout << "A K I T A - RECIEVED param EVENT !" << std::endl;
@@ -304,16 +320,23 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
 		  akita_actions::change_fuzziness(spar, fpar, argv[6]->f);
 		  akita_actions::change_sample_repeat(spar, fpar, argv[7]->i);
 		  akita_actions::change_pan(spar, fpar, argv[8]->f);
-		  akita_actions::change_samplerate_mod(spar, fpar, argv[9]->f); 		  		   		  		  
+		  akita_actions::change_samplerate_mod(spar, fpar, argv[9]->f);
+		  akita_actions::change_peak(spar, fpar, argv[10]->f, argv[11]->f, argv[12]->f);
+		  akita_actions::change_hipass(spar, fpar, argv[13]->f, argv[14]->f);
 		});
   
   // message handlers 
-  st.add_method("/akita/play", "fi",
-		[&spar](lo_arg **argv, int count) {
+  st.add_method("/akita/play", "fiii",
+		[&spar, &fpar](lo_arg **argv, int count) {
 		  // otherwise, the event is still in progress
 		  if (!(spar.current_event != NULL && spar.current_event->state != akita_play_event::FINISHED)){
+		    if (argv[1]->i < argv[2]->i + argv[3]->i ){
+		      std::cerr << "A K I T A - IGNORED play EVENT, envelope invalid !" << std::endl;
+		      return 0;
+		    }
 		    std::cout << "RECIEVED EVENT !" << std::endl;		    
-		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->i));
+		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->i, spar.fc.samplerate, spar.fc.channels));
+		    fpar.envelope.reset(new akita_envelope(argv[1]->i, argv[2]->i, argv[3]->i, spar.fc.samplerate, spar.fc.channels));
 		    return 0;
 		  } else {
 		    std::cout << "IGNORED EVENT !" << std::endl;

@@ -22,13 +22,38 @@ void change_reverb_mix (source_params<READ_TYPE>& spar, filter_params& fpar, flo
 
 template <typename READ_TYPE>
 void change_lowpass (source_params<READ_TYPE>& spar, filter_params& fpar, float new_q, float new_freq) {  
-  if(new_q < 1) { new_q = 1; }
+  if(new_q < 0.1) { new_q = 0.1; }
   if(new_freq < 1) { new_freq = 1; }
   if(new_freq > 20000) { new_freq = 20000; }
   fpar.lowpass.q = new_q;
   fpar.lowpass.frequency = new_freq;
   fpar.lowpass.update();
   fpar.lowpass_on = new_freq < 20000;
+}
+
+template <typename READ_TYPE>
+void change_hipass (source_params<READ_TYPE>& spar, filter_params& fpar, float new_q, float new_freq) {  
+  if(new_q < 0.1) { new_q = 0.1; }
+  if(new_freq < 1) { new_freq = 1; }
+  if(new_freq > 20000) { new_freq = 20000; }
+  fpar.hipass.q = new_q;
+  fpar.hipass.frequency = new_freq;
+  fpar.hipass.update();
+  fpar.hipass_on = new_freq > 2;
+}
+
+template <typename READ_TYPE>
+  void change_peak (source_params<READ_TYPE>& spar, filter_params& fpar, float new_bandwidth, float new_freq, float new_gain) {  
+  if(new_bandwidth < 0) { new_bandwidth = 1; }
+  if(new_freq < 1) { new_freq = 1; }
+  if(new_freq > 20000) { new_freq = 20000; }
+  //if(new_gain > 1.1) {new_gain = 1.1;}
+  //if(new_gain < -1.0) {new_gain = -1.0;}
+  fpar.peak.bandwidth = new_bandwidth;
+  fpar.peak.frequency = new_freq;
+  fpar.peak.gain = new_gain;
+  fpar.peak.update();
+  fpar.peak_on = new_gain != 0.0 && new_gain != -0.0;  
 }
 
 template <typename READ_TYPE>
