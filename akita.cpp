@@ -163,6 +163,7 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       fpar->fbank.process(0, current_sample);      
     }
 
+    // first lti filter block
     if (fpar->hipass_on) {    
       fpar->hipass.process(current_sample);      
     }
@@ -175,6 +176,25 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
       fpar->lowpass.process(current_sample);      
     }
 
+    // nonlinear block
+    if(fpar->nonlin_on){
+      fpar->nonlin.process(current_sample);
+    }
+
+    // second lti filter block
+    if (fpar->hipass_2_on) {    
+      fpar->hipass_2.process(current_sample);      
+    }
+
+    if (fpar->peak_2_on) {    
+      fpar->peak_2.process(current_sample);      
+    }
+    
+    if (fpar->lowpass_2_on) {    
+      fpar->lowpass_2.process(current_sample);      
+    }
+
+    // envelope
     if(fpar->mode == PMODE::MILD){
       current_sample *= fpar->envelope->tick(fpar->gain);      
     }
@@ -327,6 +347,33 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
 		  akita_actions::change_peak(spar, fpar, argv[10]->f, argv[11]->f, argv[12]->f);
 		  akita_actions::change_hipass(spar, fpar, argv[13]->f, argv[14]->f);
 		});
+
+  st.add_method("/akita/param/nonlin", "fffffffffi",
+		[&spar, &fpar](lo_arg **argv, int count) {
+		  std::cout << "A K I T A - UPDATE NONLINEAR BLOCK !" << std::endl;
+		  akita_actions::change_nonlin(spar, fpar,
+					       argv[0]->f, argv[1]->f, argv[2]->f,
+					       argv[3]->f, argv[4]->f, argv[5]->f,
+					       argv[6]->f, argv[7]->f, argv[8]->f,
+					       argv[9]->i);
+		});
+
+  st.add_method("/akita/param/lti/one", "fffffff",
+		[&spar, &fpar](lo_arg **argv, int count) {
+		  std::cout << "A K I T A - UPDATE LTI BLOCK 1 !" << std::endl;
+		  akita_actions::change_hipass(spar, fpar, argv[0]->f, argv[1]->f);
+		  akita_actions::change_peak(spar, fpar, argv[2]->f, argv[3]->f, argv[4]->f);
+		  akita_actions::change_lowpass(spar, fpar, argv[5]->f, argv[6]->f);
+		});
+
+  st.add_method("/akita/param/lti/two", "fffffff",
+		[&spar, &fpar](lo_arg **argv, int count) {
+		  std::cout << "A K I T A - UPDATE LTI BLOCK 2 !" << std::endl;
+		  akita_actions::change_hipass_2(spar, fpar, argv[0]->f, argv[1]->f);
+		  akita_actions::change_peak_2(spar, fpar, argv[2]->f, argv[3]->f, argv[4]->f);
+		  akita_actions::change_lowpass_2(spar, fpar, argv[5]->f, argv[6]->f);
+		});
+
   
   // message handlers 
   st.add_method("/akita/play", "fiii",

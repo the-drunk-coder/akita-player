@@ -54,7 +54,6 @@ struct canonical_sos_filter : public filter {
 
   float frequency;
   float q;
-  float gain;
   FMODE mode;
   int samplerate;
   
@@ -66,7 +65,7 @@ struct canonical_sos_filter : public filter {
   
   canonical_sos_filter ();
   canonical_sos_filter (FMODE mode);
-  canonical_sos_filter (float frequency, float q, float gain, int samplerate, FMODE mode);
+  canonical_sos_filter (float frequency, float q, int samplerate, FMODE mode);
 
   // update filter parameters
   void update_internals ();
@@ -101,6 +100,29 @@ struct simple_mean_filter : public filter {
   float calculate (float sample);
 };
 
+
+
+struct nonlinear_filter : public filter {
+  float kp, kn, gp, gn;
+  float alpha_mix;
+  float gain_sc;
+  float g_pre, g_post;
+  float lp_freq;
+  
+  canonical_sos_filter lp;
+
+  nonlinear_filter(float samplerate);
+  
+  float nonlinear_transfer(float sample);
+
+  float calculate(float sample);
+  void update_internals();
+};
+
+
+/*
+ * Filterbanks, mostly for "manual mode..."
+ */
 struct mean_filterbank {
   int channels;
   simple_mean_filter* filters;

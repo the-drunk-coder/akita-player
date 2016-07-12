@@ -424,9 +424,20 @@ struct filter_params {
   
   filterbank fbank; 
   mean_filterbank m_fbank;
-  canonical_sos_filter lowpass;
+
+  // first lti filter block
   canonical_sos_filter hipass;
   peak_filter peak;
+  canonical_sos_filter lowpass;
+
+  // nonlinear block
+  nonlinear_filter nonlin;
+
+  // first lti filter block
+  canonical_sos_filter hipass_2;
+  peak_filter peak_2;
+  canonical_sos_filter lowpass_2;
+  
   stk::FreeVerb rev;
   
   PMODE mode;
@@ -435,10 +446,19 @@ struct filter_params {
   std::unique_ptr<akita_envelope> envelope;
   
   std::atomic<float> gain;
-  
-  std::atomic<bool> lowpass_on;
+
+  // switches for first lti block
   std::atomic<bool> hipass_on;
   std::atomic<bool> peak_on;
+  std::atomic<bool> lowpass_on;
+
+  std::atomic<bool> nonlin_on;
+
+  // switches for second lti block
+  std::atomic<bool> hipass_2_on;
+  std::atomic<bool> peak_2_on;
+  std::atomic<bool> lowpass_2_on;
+
   std::atomic<bool> filterbank_on;
   std::atomic<bool> mean_filter_on;
   std::atomic<bool> reverb_on;
@@ -458,15 +478,18 @@ struct filter_params {
   filter_params (options_container& opts) :
     fbank(opts.out_channels, opts.samplerate, 100, 8000, 10),
     m_fbank(opts.out_channels, 5),
-    lowpass(canonical_sos_filter::LP),
     hipass(canonical_sos_filter::HP),
     peak(),
+    lowpass(canonical_sos_filter::LP),
+    nonlin(opts.samplerate),
     envelope(new akita_envelope())  
   {
 
     lowpass_on = false;
     hipass_on = false;
     peak_on = false;
+    nonlin_on = false;
+    
     filterbank_on = false;
     reverb_on = false;
     mean_filter_on = false;

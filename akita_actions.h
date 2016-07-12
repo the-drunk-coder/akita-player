@@ -20,17 +20,7 @@ void change_reverb_mix (source_params<READ_TYPE>& spar, filter_params& fpar, flo
   fpar.reverb_on = new_reverb_mix > 0.0;
  }
 
-template <typename READ_TYPE>
-void change_lowpass (source_params<READ_TYPE>& spar, filter_params& fpar, float new_q, float new_freq) {  
-  if(new_q < 0.1) { new_q = 0.1; }
-  if(new_freq < 1) { new_freq = 1; }
-  if(new_freq > 20000) { new_freq = 20000; }
-  fpar.lowpass.q = new_q;
-  fpar.lowpass.frequency = new_freq;
-  fpar.lowpass.update_internals();
-  fpar.lowpass_on = new_freq < 20000;
-}
-
+// first lti ops 
 template <typename READ_TYPE>
 void change_hipass (source_params<READ_TYPE>& spar, filter_params& fpar, float new_q, float new_freq) {  
   if(new_q < 0.1) { new_q = 0.1; }
@@ -56,6 +46,72 @@ template <typename READ_TYPE>
   fpar.peak_on = new_gain != 0.0 && new_gain != -0.0;  
 }
 
+template <typename READ_TYPE>
+void change_lowpass (source_params<READ_TYPE>& spar, filter_params& fpar, float new_q, float new_freq) {  
+  if(new_q < 0.1) { new_q = 0.1; }
+  if(new_freq < 1) { new_freq = 1; }
+  if(new_freq > 20000) { new_freq = 20000; }
+  fpar.lowpass.q = new_q;
+  fpar.lowpass.frequency = new_freq;
+  fpar.lowpass.update_internals();
+  fpar.lowpass_on = new_freq < 20000;
+}
+
+template <typename READ_TYPE>
+  void change_nonlin (source_params<READ_TYPE>& spar, filter_params& fpar,
+		      float kn, float kp, float gn,
+		      float gp, float alpha_mix, float gain_sc,
+		      float g_pre, float g_post, float lp_freq, bool on) {
+  fpar.nonlin.kn = kn;
+  fpar.nonlin.kp = kp;
+  fpar.nonlin.gn = gn;
+  fpar.nonlin.gp = gp;
+  fpar.nonlin.alpha_mix = alpha_mix;
+  fpar.nonlin.gain_sc = gain_sc;
+  fpar.nonlin.g_pre = g_pre;
+  fpar.nonlin.g_post = g_post;
+  fpar.nonlin.lp_freq = lp_freq;
+  fpar.nonlin.update_internals();
+  fpar.nonlin_on = on;
+}
+
+// second lti ops 
+template <typename READ_TYPE>
+void change_hipass_2 (source_params<READ_TYPE>& spar, filter_params& fpar, float new_q, float new_freq) {  
+  if(new_q < 0.1) { new_q = 0.1; }
+  if(new_freq < 1) { new_freq = 1; }
+  if(new_freq > 20000) { new_freq = 20000; }
+  fpar.hipass_2.q = new_q;
+  fpar.hipass_2.frequency = new_freq;
+  fpar.hipass_2.update_internals();
+  fpar.hipass_2_on = new_freq > 2;
+}
+
+template <typename READ_TYPE>
+  void change_peak_2 (source_params<READ_TYPE>& spar, filter_params& fpar, float new_bandwidth, float new_freq, float new_gain) {  
+  if(new_bandwidth < 0) { new_bandwidth = 1; }
+  if(new_freq < 1) { new_freq = 1; }
+  if(new_freq > 20000) { new_freq = 20000; }
+  //if(new_gain > 1.1) {new_gain = 1.1;}
+  //if(new_gain < -1.0) {new_gain = -1.0;}
+  fpar.peak_2.bandwidth = new_bandwidth;
+  fpar.peak_2.frequency = new_freq;
+  fpar.peak_2.gain = new_gain;
+  fpar.peak_2.update_internals();
+  fpar.peak_2_on = new_gain != 0.0 && new_gain != -0.0;  
+}
+
+template <typename READ_TYPE>
+void change_lowpass_2 (source_params<READ_TYPE>& spar, filter_params& fpar, float new_q, float new_freq) {  
+  if(new_q < 0.1) { new_q = 0.1; }
+  if(new_freq < 1) { new_freq = 1; }
+  if(new_freq > 20000) { new_freq = 20000; }
+  fpar.lowpass_2.q = new_q;
+  fpar.lowpass_2.frequency = new_freq;
+  fpar.lowpass_2.update_internals();
+  fpar.lowpass_2_on = new_freq < 20000;
+}
+ 
 template <typename READ_TYPE>
 void change_pan (source_params<READ_TYPE>& spar, filter_params& fpar, float new_pan) {  
   if(new_pan < 0) { fpar.update_pan(fpar.channels); }

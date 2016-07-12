@@ -29,19 +29,16 @@ float random_flip(float sample, float prob){
   return sample_conv.float_val;
 }
 
-
 void filter::process(float& sample){
   sample = calculate(sample);
 }
     
-
 //canonicalsos filter methods
 canonical_sos_filter::canonical_sos_filter () {
   this->frequency = 5000;
   this->mode = LP;
   this->q = 2;
   this->samplerate = 44100;
-  this->gain = 0.0;
   update_internals();
 }
 
@@ -57,20 +54,17 @@ canonical_sos_filter::canonical_sos_filter (FMODE mode) {
   this->mode = mode;
   this->q = 1;
   this->samplerate = 44100;
-  this->gain = 0.0;
   update_internals();
 }
 
 
-canonical_sos_filter::canonical_sos_filter (float frequency, float q, float gain, int samplerate, FMODE mode) {
+canonical_sos_filter::canonical_sos_filter (float frequency, float q, int samplerate, FMODE mode) {
   this->frequency = frequency;
   this->mode = mode;
   this->q = q;
   this->samplerate = samplerate;
-  this->gain = gain;
   update_internals();
 }
-
 
 void canonical_sos_filter::update_internals () {    
   del1 = 0;
@@ -113,7 +107,6 @@ float canonical_sos_filter::calculate (float sample) {
   return out;
 }
 
-
 peak_filter::peak_filter(){
   this->samplerate = 44100;
   this->frequency = 1000;
@@ -150,7 +143,6 @@ float peak_filter::calculate(float sample){
   del1 = x_h;
   return out;
 }
-
 
 simple_mean_filter::simple_mean_filter(int points){
   this->points = points;
@@ -213,6 +205,53 @@ float simple_mean_filter::calculate (float sample) {
   return out;        
 }
 
+
+/*
+ * Nonlinear block implementation
+*/ 
+nonlinear_filter::nonlinear_filter (float samplerate) :
+  lp(2000, 1.0, samplerate, canonical_sos_filter::LP)
+{
+  // some random default values 
+  this->kn = 0.9;
+  this->kp = 0.9;
+  this->gn = 1.0;
+  this->gp = 1.0;
+  this->alpha_mix = 0.5;
+  this->gain_sc = 1.0;
+  this->g_pre = 1.0;
+  this->g_post = 1.0;
+  this->lp_freq = 2000; 
+}
+
+void nonlinear_filter::update_internals() {  
+  lp.frequency = this->lp_freq;
+  lp.update_internals();
+}
+
+
+float nonlinear_filter::calculate (float sample) {  
+  sample *= g_pre;
+  sample = ((sample * (1 - alpha_mix))
+	    + nonlinear_transfer(sample - (lp.calculate(fabs(sample)) * gain_sc)) * alpha_mix) * g_post;
+  return sample;
+}
+  
+float nonlinear_filter::nonlinear_transfer (float sample) {
+  if (sample > kp){
+    sample = tanh(kp) - (((pow(tanh(kp), 2) - 1) / gp) * tanh((gp * sample) - kp));
+  } else if (sample >= -kn && sample <= kp) {
+    sample = tanh(sample);
+  } else if (sample <= -kn) {
+    sample = -tanh(kn) - (((pow(tanh(kn), 2) - 1) / gn) * tanh((gn * sample) + kn));
+  }
+  return sample;
+}
+
+
+/*
+ * Filterbank implementations
+ */
 mean_filterbank::mean_filterbank (int channels, int points) {
   this->channels = channels;
   filters = new simple_mean_filter[channels];
