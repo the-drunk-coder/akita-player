@@ -27,7 +27,7 @@ void change_lowpass (source_params<READ_TYPE>& spar, filter_params& fpar, float 
   if(new_freq > 20000) { new_freq = 20000; }
   fpar.lowpass.q = new_q;
   fpar.lowpass.frequency = new_freq;
-  fpar.lowpass.update();
+  fpar.lowpass.update_internals();
   fpar.lowpass_on = new_freq < 20000;
 }
 
@@ -38,7 +38,7 @@ void change_hipass (source_params<READ_TYPE>& spar, filter_params& fpar, float n
   if(new_freq > 20000) { new_freq = 20000; }
   fpar.hipass.q = new_q;
   fpar.hipass.frequency = new_freq;
-  fpar.hipass.update();
+  fpar.hipass.update_internals();
   fpar.hipass_on = new_freq > 2;
 }
 
@@ -52,7 +52,7 @@ template <typename READ_TYPE>
   fpar.peak.bandwidth = new_bandwidth;
   fpar.peak.frequency = new_freq;
   fpar.peak.gain = new_gain;
-  fpar.peak.update();
+  fpar.peak.update_internals();
   fpar.peak_on = new_gain != 0.0 && new_gain != -0.0;  
 }
 

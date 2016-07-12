@@ -29,6 +29,12 @@ float random_flip(float sample, float prob){
   return sample_conv.float_val;
 }
 
+
+void filter::process(float& sample){
+  sample = calculate(sample);
+}
+    
+
 //canonicalsos filter methods
 canonical_sos_filter::canonical_sos_filter () {
   this->frequency = 5000;
@@ -36,7 +42,7 @@ canonical_sos_filter::canonical_sos_filter () {
   this->q = 2;
   this->samplerate = 44100;
   this->gain = 0.0;
-  update();
+  update_internals();
 }
 
 //canonicalsos filter methods
@@ -52,7 +58,7 @@ canonical_sos_filter::canonical_sos_filter (FMODE mode) {
   this->q = 1;
   this->samplerate = 44100;
   this->gain = 0.0;
-  update();
+  update_internals();
 }
 
 
@@ -62,18 +68,11 @@ canonical_sos_filter::canonical_sos_filter (float frequency, float q, float gain
   this->q = q;
   this->samplerate = samplerate;
   this->gain = gain;
-  update();
+  update_internals();
 }
 
-void canonical_sos_filter::update (float frequency, float q, float gain, int samplerate, FMODE mode){
-  this->frequency = frequency;
-  this->mode = mode;
-  this->q = q;
-  this->samplerate = samplerate;
-  update();
-}
 
-void canonical_sos_filter::update () {    
+void canonical_sos_filter::update_internals () {    
   del1 = 0;
   del2 = 0;
   
@@ -114,10 +113,6 @@ float canonical_sos_filter::calculate (float sample) {
   return out;
 }
 
-void canonical_sos_filter::process(float& sample){
-  sample = calculate(sample);          
-}
-
 
 peak_filter::peak_filter(){
   this->samplerate = 44100;
@@ -126,10 +121,10 @@ peak_filter::peak_filter(){
   this->gain = 0.0;
   this->del1 = 0;
   this->del2 = 0;
-  update();
+  update_internals();
 }
 
-void peak_filter::update(){
+void peak_filter::update_internals(){
   float w_c = (2 * frequency) / samplerate;
   float w_b = (2 * bandwidth) / samplerate;
   
@@ -147,13 +142,6 @@ void peak_filter::update(){
   }
 }
 
-void peak_filter::update(float frequency, float gain, float bandwidth){
-  this->frequency = frequency;
-  this->bandwidth = bandwidth;
-  this->gain = gain;
-  update();
-}
-
 float peak_filter::calculate(float sample){
   float x_h = sample - d * (1 - c) * del1 + (c * del2);
   float y_1 = (-1.0 * c * x_h) + (d * (1-c) * del1) + del2;
@@ -163,31 +151,27 @@ float peak_filter::calculate(float sample){
   return out;
 }
 
-void peak_filter::process(float& sample){
-  sample = calculate(sample);
-}
-
-
 
 simple_mean_filter::simple_mean_filter(int points){
-  init(points);
+  this->points = points;
+  update_internals();
 }
 
 // initialize with 7 points per default ...
 simple_mean_filter::simple_mean_filter () {
-  init(13);
+  this->points = 13;
+  update_internals();
 }
   
 simple_mean_filter::~simple_mean_filter () {
   delete[] delay;
 }
 
-void simple_mean_filter::init (int points){
+void simple_mean_filter::update_internals() {
   if(initialized){
     delete[] delay;
   }
-  
-  this->points = points;
+    
   newest = 0;
   //kernel = new float[points];
   factor = 1.0f / points;
@@ -229,21 +213,19 @@ float simple_mean_filter::calculate (float sample) {
   return out;        
 }
 
-void simple_mean_filter::apply(float& sample){
-  sample = calculate(sample);
-}
-
 mean_filterbank::mean_filterbank (int channels, int points) {
   this->channels = channels;
   filters = new simple_mean_filter[channels];
   for(int i = 0; i < channels; i++){
-    filters[i].init(points);
+    filters[i].points = points;
+    filters[i].update_internals();
   }
 }
 
-void mean_filterbank::update(int points){
+void mean_filterbank::update (int points){
   for(int i = 0; i < channels; i++){
-    filters[i].init(points);
+    filters[i].points = points;
+    filters[i].update_internals();
   }
 }
 
@@ -251,22 +233,34 @@ mean_filterbank::~mean_filterbank () {
   delete[] filters;
 }
 
-void mean_filterbank::apply (int channel, float& sample) {
-  filters[channel].apply(sample);
+void mean_filterbank::process (int channel, float& sample) {
+  filters[channel].process(sample);
 }
 
-filterbank::filterbank(int channels, int samplerate, float lowcut, float hicut, int bands) {
+filterbank::filterbank (int channels, int samplerate, float lowcut, float hicut, int bands) {
   this->bands = bands;
   this->channels = channels;
   
   fbank = new canonical_sos_filter[channels * bands];
   
   for(int ch = 0; ch < channels; ch++) {
-    fbank[ch * bands].update(lowcut, 1.5, 0.0, samplerate, canonical_sos_filter::HP);
+    fbank[ch * bands].mode = canonical_sos_filter::HP;
+    fbank[ch * bands].frequency = lowcut;
+    fbank[ch * bands].q = 1.5;
+    fbank[ch * bands].samplerate = samplerate;    
+    fbank[ch * bands].update_internals();
     for(int b = 1; b < bands-1; b++) {
-      fbank[(ch * bands) + b].update(lowcut + (b * ((hicut - lowcut) / bands)) , 1.5, 0.0, samplerate, canonical_sos_filter::NOTCH);
+      fbank[(ch * bands) + b].mode = canonical_sos_filter::NOTCH;
+      fbank[(ch * bands) + b].frequency = lowcut + (b * ((hicut - lowcut) / bands));
+      fbank[(ch * bands) + b].samplerate = samplerate;
+      fbank[(ch * bands) + b].q = 1.5;
+      fbank[(ch * bands) + b].update_internals();      
     }
-    fbank[(ch * bands) + bands-1].update(hicut, 1.5, 0.0, samplerate, canonical_sos_filter::LP);
+    fbank[(ch * bands) + bands-1].mode = canonical_sos_filter::LP;
+    fbank[(ch * bands) + bands-1].frequency = hicut;
+    fbank[(ch * bands) + bands-1].q = 1.5;
+    fbank[(ch * bands) + bands-1].samplerate = samplerate;
+    fbank[(ch * bands) + bands-1].update_internals();
   }
 
   fmask = new bool[bands];
@@ -280,7 +274,7 @@ filterbank::~filterbank () {
   delete [] fmask;
 }
 
-void filterbank::apply (int channel, float& sample) {    
+void filterbank::process (int channel, float& sample) {    
   for(int b = 0; b < bands; b++){
     if(fmask[b]){	
       fbank[(channel * bands) + b].process(sample);

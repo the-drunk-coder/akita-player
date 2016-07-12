@@ -13,7 +13,16 @@ union float_conv {
 
 float random_flip(float sample, float prob);
 
-struct peak_filter {
+
+struct filter {
+  
+  void process(float& sample);
+  virtual float calculate(float sample) = 0;
+  virtual void update_internals() = 0;
+  
+};
+
+struct peak_filter : public filter {
 
   float frequency;
   float bandwidth;
@@ -33,17 +42,14 @@ struct peak_filter {
   
   peak_filter();
 
-  void update();
-  void update(float frequency, float gain, float bandwith);
-
-  float calculate(float sample);
-  void process(float& sample);
+  void update_internals();
+  float calculate(float sample);  
 };
 
 /*
  * Filter and filterbank
  */
-struct canonical_sos_filter {
+struct canonical_sos_filter : public filter {
   enum FMODE {HP, BP, LP, NOTCH, AP};
 
   float frequency;
@@ -57,28 +63,23 @@ struct canonical_sos_filter {
   float k;  
   
   float del1, del2; 
-
   
-  canonical_sos_filter();
+  canonical_sos_filter ();
   canonical_sos_filter (FMODE mode);
   canonical_sos_filter (float frequency, float q, float gain, int samplerate, FMODE mode);
 
   // update filter parameters
-  void update ();
-  void update (float frequency, float q, float gain, int samplerate, FMODE mode);
-  
+  void update_internals ();
+    
   // calculate filtered sample
-  float calculate (float sample);
-
-  // process sample,for pipeline usage
-  void process (float& sample);
+  float calculate (float sample);  
 };
 
 
 /*
  * simple mean filter, to shave the edge off a little ...
  */
-struct simple_mean_filter {
+struct simple_mean_filter : public filter {
   //float* kernel;
   float* delay;
   float factor;
@@ -96,12 +97,8 @@ struct simple_mean_filter {
   
   ~simple_mean_filter ();
 
-  void init (int points);
-  
+  void update_internals();  
   float calculate (float sample);
-  
-  void apply (float& sample);
-
 };
 
 struct mean_filterbank {
@@ -114,7 +111,7 @@ struct mean_filterbank {
   
   void update(int points);
   
-  void apply (int channel, float& sample);
+  void process (int channel, float& sample);
 };
 
 
@@ -130,7 +127,7 @@ struct filterbank {
 
   ~filterbank();
   
-  void apply (int channel, float& sample);
+  void process (int channel, float& sample);
 
   void toggle_band (int band);
 

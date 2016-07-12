@@ -156,11 +156,11 @@ int filter_callback(void *outputBuffer, void *inputBuffer,
     }  
     
     if(fpar->mean_filter_on){
-      fpar->m_fbank.apply(0, current_sample);
+      fpar->m_fbank.process(0, current_sample);
     }
     
     if (fpar->filterbank_on) {    
-      fpar->fbank.apply(0, current_sample);      
+      fpar->fbank.process(0, current_sample);      
     }
 
     if (fpar->hipass_on) {    
@@ -276,24 +276,27 @@ void handle_osc_input(source_params<READ_TYPE>& spar, filter_params& fpar, optio
 
   // message handlers 
   st.add_method("/akita/play", "fiiiffiffffifffffff",
-		[&spar, &fpar, &opts](lo_arg **argv, int count) {
-		  akita_actions::change_gain(spar, fpar, argv[4]->f);
-		  akita_actions::change_reverb_mix(spar, fpar, argv[5]->f);
-		  fpar.mean_filter_on = argv[6]->i;
-		  akita_actions::change_lowpass(spar, fpar, argv[7]->f, argv[8]->f);
-		  akita_actions::change_flippiness(spar, fpar, argv[9]->f);
-		  akita_actions::change_fuzziness(spar, fpar, argv[10]->f);		  
-		  akita_actions::change_pan(spar, fpar, argv[12]->f);
-		  akita_actions::change_peak(spar, fpar, argv[14]->f, argv[15]->f, argv[16]->f);
-		  akita_actions::change_hipass(spar, fpar, argv[17]->f, argv[18]->f);
-		  
+		[&spar, &fpar, &opts](lo_arg **argv, int count) {		  		  
 		  // otherwise, the event is still in progress
 		  if (!(spar.current_event != NULL && spar.current_event->state != akita_play_event::FINISHED)){
-		    std::cout << "A K I T A - instance at " << opts.udp_port << " RECIEVED play EVENT ! " << std::endl;		    
+		    
 		    if (argv[1]->i < argv[2]->i + argv[3]->i ){
 		      std::cerr << "A K I T A - IGNORED play EVENT, envelope invalid !" << std::endl;
 		      return 0;
 		    }
+
+		    std::cout << "A K I T A - instance at " << opts.udp_port << " RECIEVED play EVENT ! " << std::endl;
+		    
+		    akita_actions::change_gain(spar, fpar, argv[4]->f);
+		    akita_actions::change_reverb_mix(spar, fpar, argv[5]->f);
+		    fpar.mean_filter_on = argv[6]->i;
+		    akita_actions::change_lowpass(spar, fpar, argv[7]->f, argv[8]->f);
+		    akita_actions::change_flippiness(spar, fpar, argv[9]->f);
+		    akita_actions::change_fuzziness(spar, fpar, argv[10]->f);		  
+		    akita_actions::change_pan(spar, fpar, argv[12]->f);
+		    akita_actions::change_peak(spar, fpar, argv[14]->f, argv[15]->f, argv[16]->f);
+		    akita_actions::change_hipass(spar, fpar, argv[17]->f, argv[18]->f);
+
 		    spar.current_event.reset(new akita_play_event(argv[0]->f, argv[1]->i, spar.fc.samplerate, spar.fc.channels));
 		    fpar.envelope.reset(new akita_envelope(argv[1]->i, argv[2]->i, argv[3]->i, spar.fc.samplerate, spar.fc.channels));
 		    
