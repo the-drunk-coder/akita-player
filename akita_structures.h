@@ -481,6 +481,9 @@ struct filter_params {
     hipass(canonical_sos_filter::HP),
     peak(),
     lowpass(canonical_sos_filter::LP),
+    hipass_2(canonical_sos_filter::HP),
+    peak_2(),
+    lowpass_2(canonical_sos_filter::LP),  
     nonlin(opts.samplerate),
     envelope(new akita_envelope())  
   {
